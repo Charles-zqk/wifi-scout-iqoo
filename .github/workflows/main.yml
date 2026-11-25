@@ -24,23 +24,30 @@ jobs:
           gradle-version: '8.7'
 
       - name: Locate project and build APK
+        id: build
         run: |
           if [ -f "settings.gradle.kts" ]; then
             PROJECT_DIR="."
           elif [ -f "wifi-scout-android/settings.gradle.kts" ]; then
             PROJECT_DIR="wifi-scout-android"
           else
-            echo "ERROR: settings.gradle.kts not found. Current files:"
+            echo "ERROR: settings.gradle.kts not found"
             ls -la
             exit 1
           fi
           cd "$PROJECT_DIR"
+          if [ -d "app/app" ]; then
+            echo "ERROR: 检测到嵌套的 app/app 目录，请回到仓库根目录上传 app 文件夹"
+            exit 1
+          fi
+          VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts || echo "1.3.0")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
           gradle assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/WiFiScout-v1.0.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/WiFiScout-v${VER}.apk"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WiFiScout-APK
-          path: WiFiScout-v1.0.apk
+          name: WiFiScout-v${{ steps.build.outputs.version }}-run${{ github.run_number }}
+          path: WiFiScout-v${{ steps.build.outputs.version }}.apk
           retention-days: 30
