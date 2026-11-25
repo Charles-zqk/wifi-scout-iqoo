@@ -1,1 +1,46 @@
+name: Build WiFi Scout APK
 
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Locate project and build APK
+        run: |
+          if [ -f "settings.gradle.kts" ]; then
+            PROJECT_DIR="."
+          elif [ -f "wifi-scout-android/settings.gradle.kts" ]; then
+            PROJECT_DIR="wifi-scout-android"
+          else
+            echo "ERROR: settings.gradle.kts not found. Current files:"
+            ls -la
+            exit 1
+          fi
+          cd "$PROJECT_DIR"
+          gradle assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/WiFiScout-v1.0.apk"
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WiFiScout-APK
+          path: WiFiScout-v1.0.apk
+          retention-days: 30
