@@ -27,9 +27,18 @@
                 android:orientation="vertical">
 
                 <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="WiFi侦察兵 v1.3 · 自动切网版"
+                    android:textColor="@color/accent_sky"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
                     android:id="@+id/tvNetworkTitle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:text="📶 正在识别当前网络…"
