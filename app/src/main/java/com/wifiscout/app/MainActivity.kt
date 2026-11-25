@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.ConnectivityManager
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
@@ -19,6 +20,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -38,13 +40,17 @@ class MainActivity : AppCompatActivity() {
     private var netCallback: ConnectivityManager.NetworkCallback? = null
     private var currentNetInfo: CurrentNetworkInfo? = null
     private var lastResult: SpeedTestResult? = null
+    private var onlyStarredFilter = false
 
     private lateinit var tvNetworkTitle: TextView
     private lateinit var tvNetworkDetail: TextView
-    private lateinit var btnRefreshNet: TextView
+    private lateinit var tvAutoEngineBadge: TextView
     private lateinit var permissionBanner: LinearLayout
     private lateinit var tvPermissionReason: TextView
     private lateinit var btnFixPermission: Button
+    private lateinit var autoProgressBanner: LinearLayout
+    private lateinit var tvAutoProgress: TextView
+    private lateinit var btnStopAuto: TextView
 
     private lateinit var tvPhase: TextView
     private lateinit var tvLiveSpeed: TextView
@@ -54,6 +60,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvUpSub: TextView
     private lateinit var tvPing: TextView
     private lateinit var tvJitter: TextView
+    private lateinit var btnAutoBatchTest: Button
     private lateinit var btnStartTest: Button
     private lateinit var btnModeToggle: TextView
     private lateinit var btnNodeToggle: TextView
@@ -67,28 +74,27 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvCapSummary: TextView
     private lateinit var btnCopyReport: Button
 
+    private lateinit var btnScanWifis: TextView
+    private lateinit var btnFilterStarred: TextView
+    private lateinit var tvScanStatus: TextView
+    private lateinit var scanListContainer: LinearLayout
+
     private lateinit var tvBestCallout: TextView
     private lateinit var btnClearHistory: TextView
     private lateinit var historyContainer: LinearLayout
     private lateinit var tvEmptyHistory: TextView
 
-    private lateinit var btnScanWifis: Button
-    private lateinit var btnFilterStarred: TextView
-    private lateinit var btnSwitchWifiPanel: TextView
-    private lateinit var tvScanStatus: TextView
-    private lateinit var scanListContainer: LinearLayout
-    private var onlyStarredFilter = false
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        refreshNetworkStatus()
+        renderScannedWifis(fromLiveScan = false)
+    }
 
     private val scanReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             renderScannedWifis(fromLiveScan = true)
         }
-    }
-
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) {
-        refreshNetworkStatus()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -99,7 +105,6 @@ class MainActivity : AppCompatActivity() {
         updateSettingsChips()
         renderHistory()
 
-        // 首次启动时若缺少位置权限，主动请求以便直接读取 Wi-Fi SSID 名称
         if (!NetworkInspector.hasFineLocationPermission(this)) {
             requestWifiPermissions()
         }
@@ -108,11 +113,17 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshNetworkStatus()
+        updateAutoEngineBadge()
+
         val cb = NetworkInspector.createLiveWifiCallback {
-            runOnUiThread { refreshNetworkStatus() }
+            runOnUiThread {
+                refreshNetworkStatus()
+                renderScannedWifis(fromLiveScan = false)
+            }
         }
         netCallback = cb
         NetworkInspector.registerCallback(this, cb)
+
         try {
             ContextCompat.registerReceiver(
                 this,
@@ -122,7 +133,16 @@ class MainActivity : AppCompatActivity() {
             )
         } catch (_: Exception) {
         }
+
+        WifiAutoSwitchService.statusListener = { status ->
+            runOnUiThread { handleAutoStatus(status) }
+        }
+        handleAutoStatus(WifiAutoSwitchService.lastStatus)
+
+        // 自动触发一次扫描并展示最新列表，无需手动点按钮
+        NetworkInspector.triggerWifiScan(this)
         renderScannedWifis(fromLiveScan = false)
+        renderHistory()
     }
 
     override fun onPause() {
@@ -137,16 +157,20 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        WifiAutoSwitchService.statusListener = null
         uiScope.cancel()
     }
 
     private fun bindViews() {
         tvNetworkTitle = findViewById(R.id.tvNetworkTitle)
         tvNetworkDetail = findViewById(R.id.tvNetworkDetail)
-        btnRefreshNet = findViewById(R.id.btnRefreshNet)
+        tvAutoEngineBadge = findViewById(R.id.tvAutoEngineBadge)
         permissionBanner = findViewById(R.id.permissionBanner)
         tvPermissionReason = findViewById(R.id.tvPermissionReason)
         btnFixPermission = findViewById(R.id.btnFixPermission)
+        autoProgressBanner = findViewById(R.id.autoProgressBanner)
+        tvAutoProgress = findViewById(R.id.tvAutoProgress)
+        btnStopAuto = findViewById(R.id.btnStopAuto)
 
         tvPhase = findViewById(R.id.tvPhase)
         tvLiveSpeed = findViewById(R.id.tvLiveSpeed)
@@ -156,6 +180,7 @@ class MainActivity : AppCompatActivity() {
         tvUpSub = findViewById(R.id.tvUpSub)
         tvPing = findViewById(R.id.tvPing)
         tvJitter = findViewById(R.id.tvJitter)
+        btnAutoBatchTest = findViewById(R.id.btnAutoBatchTest)
         btnStartTest = findViewById(R.id.btnStartTest)
         btnModeToggle = findViewById(R.id.btnModeToggle)
         btnNodeToggle = findViewById(R.id.btnNodeToggle)
@@ -169,22 +194,24 @@ class MainActivity : AppCompatActivity() {
         tvCapSummary = findViewById(R.id.tvCapSummary)
         btnCopyReport = findViewById(R.id.btnCopyReport)
 
+        btnScanWifis = findViewById(R.id.btnScanWifis)
+        btnFilterStarred = findViewById(R.id.btnFilterStarred)
+        tvScanStatus = findViewById(R.id.tvScanStatus)
+        scanListContainer = findViewById(R.id.scanListContainer)
+
         tvBestCallout = findViewById(R.id.tvBestCallout)
         btnClearHistory = findViewById(R.id.btnClearHistory)
         historyContainer = findViewById(R.id.historyContainer)
         tvEmptyHistory = findViewById(R.id.tvEmptyHistory)
-
-        btnScanWifis = findViewById(R.id.btnScanWifis)
-        btnFilterStarred = findViewById(R.id.btnFilterStarred)
-        btnSwitchWifiPanel = findViewById(R.id.btnSwitchWifiPanel)
-        tvScanStatus = findViewById(R.id.tvScanStatus)
-        scanListContainer = findViewById(R.id.scanListContainer)
     }
 
     private fun setupListeners() {
-        btnRefreshNet.setOnClickListener {
-            refreshNetworkStatus()
-            toast("已刷新当前网络信息")
+        tvAutoEngineBadge.setOnClickListener {
+            if (WifiAutoSwitchService.isEnabled()) {
+                toast("自动切网引擎已开启！可直接点任意 Wi-Fi 切换，或点一键轮测")
+            } else {
+                showAccessibilitySetupDialog()
+            }
         }
 
         btnFixPermission.setOnClickListener {
@@ -196,6 +223,27 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        btnStopAuto.setOnClickListener {
+            WifiAutoSwitchService.instance?.cancelRunningTask()
+            autoProgressBanner.visibility = View.GONE
+        }
+
+        // 主按钮 1：一键自动轮测所有已保存的 Wi-Fi
+        btnAutoBatchTest.setOnClickListener {
+            if (!ensureLocationReady()) return@setOnClickListener
+            val svc = WifiAutoSwitchService.instance
+            if (svc == null) {
+                showAccessibilitySetupDialog()
+                return@setOnClickListener
+            }
+            if (WifiAutoSwitchService.lastStatus.running) {
+                svc.cancelRunningTask()
+            } else {
+                svc.runBatchInspectSavedWifis()
+            }
+        }
+
+        // 次按钮 2：仅测当前网络
         btnStartTest.setOnClickListener {
             if (testJob?.isActive == true) {
                 testJob?.cancel()
@@ -211,7 +259,7 @@ class MainActivity : AppCompatActivity() {
             val next = if (HistoryStore.getMode(this) == TestMode.LITE) TestMode.FULL else TestMode.LITE
             HistoryStore.setMode(this, next)
             updateSettingsChips()
-            toast(if (next == TestMode.LITE) "已切换：省流模式 (~2-5MB)" else "已切换：精准满载模式 (~10-22MB)")
+            toast(if (next == TestMode.LITE) "省流模式 (~2-5MB)" else "精准模式 (~10-22MB)")
         }
 
         btnNodeToggle.setOnClickListener {
@@ -226,56 +274,103 @@ class MainActivity : AppCompatActivity() {
 
         btnCopyReport.setOnClickListener { copyVerdictReport() }
 
-        btnClearHistory.setOnClickListener {
-            HistoryStore.clearHistory(this)
-            renderHistory()
-            WifiScoutWidgetProvider.refreshAllWidgets(this)
-            toast("已清空附近网络对比记录")
-        }
-
         btnScanWifis.setOnClickListener {
-            if (!NetworkInspector.hasFineLocationPermission(this)) {
-                requestWifiPermissions()
-                return@setOnClickListener
-            }
-            if (!NetworkInspector.isLocationServiceEnabled(this)) {
-                toast("请先打开定位服务(GPS)开关，系统才允许扫描附近 Wi-Fi")
-                startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-                return@setOnClickListener
-            }
-            tvScanStatus.text = "正在扫描附近 Wi-Fi 信号强度…"
-            val triggered = NetworkInspector.triggerWifiScan(this)
+            if (!ensureLocationReady()) return@setOnClickListener
+            val ok = NetworkInspector.triggerWifiScan(this)
             renderScannedWifis(fromLiveScan = false)
-            if (!triggered) {
-                toast("系统限制频繁扫描(2分钟内最多4次)，已展示最新缓存强度")
-            } else {
-                toast("正在扫描附近 Wi-Fi 强度…")
-            }
+            toast(if (ok) "正在刷新附近 Wi-Fi 列表…" else "已展示最新信号强度（系统限频中）")
         }
 
         btnFilterStarred.setOnClickListener {
             onlyStarredFilter = !onlyStarredFilter
-            btnFilterStarred.text = if (onlyStarredFilter) "★ 仅看已标密码" else "★ 全部(已标置顶)"
+            btnFilterStarred.text = if (onlyStarredFilter) "★ 仅已标" else "★ 全部"
             renderScannedWifis(fromLiveScan = false)
         }
 
-        btnSwitchWifiPanel.setOnClickListener {
-            openQuickWifiSwitcher()
+        btnClearHistory.setOnClickListener {
+            HistoryStore.clearHistory(this)
+            renderHistory()
+            renderScannedWifis(fromLiveScan = false)
+            WifiScoutWidgetProvider.refreshAllWidgets(this)
+            toast("已清空实测排行榜")
         }
     }
 
-    private fun openQuickWifiSwitcher() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startActivity(Intent(Settings.Panel.ACTION_WIFI))
-            } else {
-                startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
+    private fun ensureLocationReady(): Boolean {
+        if (!NetworkInspector.hasFineLocationPermission(this)) {
+            requestWifiPermissions()
+            return false
+        }
+        if (!NetworkInspector.isLocationServiceEnabled(this)) {
+            toast("请先开启手机的定位服务(GPS)开关")
+            startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            return false
+        }
+        return true
+    }
+
+    private fun updateAutoEngineBadge() {
+        if (WifiAutoSwitchService.isEnabled()) {
+            tvAutoEngineBadge.text = "🤖 自动切网已开"
+            tvAutoEngineBadge.setBackgroundResource(R.drawable.bg_badge_green)
+            tvAutoEngineBadge.setTextColor(ContextCompat.getColor(this, R.color.accent_green))
+        } else {
+            tvAutoEngineBadge.text = "开启自动切网"
+            tvAutoEngineBadge.setBackgroundResource(R.drawable.bg_badge_amber)
+            tvAutoEngineBadge.setTextColor(ContextCompat.getColor(this, R.color.accent_amber))
+        }
+    }
+
+    /** iQOO / OriginOS 开启无障碍两步指引弹窗 */
+    private fun showAccessibilitySetupDialog() {
+        val msg = "开启「无障碍服务」一次后，即可实现：\n" +
+            "• 点下方列表里的任意 Wi-Fi 直接自动切过去并测速\n" +
+            "• 一键自动轮流测试附近所有已存密码的 Wi-Fi 并自动切回最快那一个\n\n" +
+            "【iQOO OriginOS 开启步骤】\n" +
+            "第1步（若无障碍开关灰掉）：点「去应用信息」→ 右上角三个点 ⋮ → 点击「允许受限设置」。\n" +
+            "第2步：点「去开无障碍」→ 找到「已下载的应用 / WiFi侦察兵」→ 打开开关即可。"
+
+        AlertDialog.Builder(this)
+            .setTitle("开启全自动切网测速引擎")
+            .setMessage(msg)
+            .setPositiveButton("第2步：去开无障碍") { _, _ ->
+                try {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (_: Exception) {
+                    toast("请在系统设置 → 快捷与辅助 → 无障碍中开启 WiFi侦察兵")
+                }
             }
-        } catch (_: Exception) {
-            try {
-                startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
-            } catch (_: Exception) {
-                toast("请下拉状态栏手动切换 Wi-Fi")
+            .setNeutralButton("第1步：应用信息(解锁受限)") { _, _ ->
+                try {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", packageName, null)
+                    }
+                    startActivity(intent)
+                } catch (_: Exception) {
+                }
+            }
+            .setNegativeButton("暂不开启", null)
+            .show()
+    }
+
+    private fun handleAutoStatus(status: AutoTaskStatus) {
+        if (status.running) {
+            autoProgressBanner.visibility = View.VISIBLE
+            tvAutoProgress.text = status.message
+            btnAutoBatchTest.text = "■ 正在自动轮测中（点击停止）"
+        } else {
+            btnAutoBatchTest.text = "🤖 一键轮测已存 Wi-Fi（自动切网找最快）"
+            if (!status.finishedSummary.isNullOrEmpty()) {
+                autoProgressBanner.visibility = View.VISIBLE
+                tvAutoProgress.text = status.finishedSummary
+                renderHistory()
+                renderScannedWifis(fromLiveScan = false)
+                HistoryStore.latestResult(this)?.let { syncMainResultUI(it) }
+            } else if (status.message.isNotEmpty() && status.message != "自动切网引擎已就绪") {
+                autoProgressBanner.visibility = View.VISIBLE
+                tvAutoProgress.text = status.message
+            } else {
+                autoProgressBanner.visibility = View.GONE
             }
         }
     }
@@ -310,12 +405,12 @@ class MainActivity : AppCompatActivity() {
         when {
             info.needsLocationPermission -> {
                 permissionBanner.visibility = View.VISIBLE
-                tvPermissionReason.text = "安卓系统要求授予「位置信息」权限才能读取当前 Wi-Fi 名称（不会上传定位）"
+                tvPermissionReason.text = "授予「位置信息」权限以显示真实 Wi-Fi 名称和附近 Wi-Fi 列表"
                 btnFixPermission.text = "一键授权显示 Wi-Fi 名称"
             }
             info.needsLocationToggle -> {
                 permissionBanner.visibility = View.VISIBLE
-                tvPermissionReason.text = "请打开手机下拉栏的「定位服务(GPS)」开关，系统才会返回真实 Wi-Fi 名称"
+                tvPermissionReason.text = "请打开下拉栏的「定位服务(GPS)」开关，系统才会返回 Wi-Fi 名称"
                 btnFixPermission.text = "去开启定位开关"
             }
             else -> {
@@ -328,25 +423,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateSettingsChips() {
         val mode = HistoryStore.getMode(this)
-        btnModeToggle.text = if (mode == TestMode.LITE) "⚡ 省流模式" else "🎯 精准模式"
-
-        val nodeLabel = when (HistoryStore.getNodePref(this)) {
-            NodePref.AUTO -> "🌐 节点:自动优选"
-            NodePref.CLOUDFLARE -> "🌐 节点:Cloudflare"
-            NodePref.CN -> "🌐 节点:国内兼容"
+        btnModeToggle.text = if (mode == TestMode.LITE) "省流" else "精准"
+        btnNodeToggle.text = when (HistoryStore.getNodePref(this)) {
+            NodePref.AUTO -> "自动节点"
+            NodePref.CLOUDFLARE -> "全球节点"
+            NodePref.CN -> "国内节点"
         }
-        btnNodeToggle.text = nodeLabel
     }
 
     private fun setRunningState(running: Boolean) {
-        btnStartTest.text = if (running) "■ 停止测速" else "▶ 一键测速 · 检查是否适合电脑连"
+        btnStartTest.text = if (running) "■ 停止测速" else "⚡ 仅测当前网络"
     }
 
     private fun startSpeedTest() {
         refreshNetworkStatus()
         val netInfo = currentNetInfo ?: NetworkInspector.inspect(this)
         if (netInfo.kind == NetKind.OFFLINE) {
-            toast("当前没有网络连接，请先连接 Wi-Fi 或开启流量")
+            toast("当前没有网络连接")
             return
         }
 
@@ -358,7 +451,7 @@ class MainActivity : AppCompatActivity() {
         tvPing.text = "--"
         tvJitter.text = "--"
         tvLiveSpeed.text = "0.0"
-        tvPhase.text = "准备测速…"
+        tvPhase.text = "正在测速…"
 
         val mode = HistoryStore.getMode(this)
         val nodePref = HistoryStore.getNodePref(this)
@@ -369,51 +462,60 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         tvPhase.text = ev.phase
                         if (ev.currentMbps > 0) {
-                            tvLiveSpeed.text = String.format(Locale.US, if (ev.currentMbps >= 100) "%.0f" else "%.1f", ev.currentMbps)
+                            tvLiveSpeed.text = String.format(
+                                Locale.US,
+                                if (ev.currentMbps >= 100) "%.0f" else "%.1f",
+                                ev.currentMbps
+                            )
                         }
                         if (ev.pingMs != null) tvPing.text = ev.pingMs.toInt().toString()
                         if (ev.jitterMs != null) tvJitter.text = ev.jitterMs.toInt().toString()
                         val mb = ev.bytesUsed / (1024.0 * 1024.0)
-                        val nodeTxt = ev.nodeName ?: "探测中"
-                        tvMetaInfo.text = String.format(Locale.US, "节点：%s · 本次耗流：%.2f MB", nodeTxt, mb)
+                        tvMetaInfo.text = String.format(Locale.US, "节点：%s · 耗流：%.2f MB", ev.nodeName ?: "优选", mb)
                     }
                 }
 
                 lastResult = result
                 HistoryStore.saveResult(this@MainActivity, result)
-
-                tvLiveSpeed.text = String.format(Locale.US, if (result.downloadMbps >= 100) "%.0f" else "%.1f", result.downloadMbps)
-                tvPhase.text = "测速完成 · ${result.verdict.tierLabel}"
-                tvDown.text = String.format(Locale.US, "%.1f", result.downloadMbps)
-                tvDownSub.text = String.format(Locale.US, "%.1f MB/s", result.downloadMbps / 8.0)
-
-                if (result.uploadMbps != null) {
-                    tvUp.text = String.format(Locale.US, "%.1f", result.uploadMbps)
-                    tvUpSub.text = String.format(Locale.US, "%.1f MB/s", result.uploadMbps / 8.0)
-                } else {
-                    tvUp.text = "N/A"
-                    tvUpSub.text = "仅测下载"
-                }
-
-                tvPing.text = result.pingMs.toInt().toString()
-                tvJitter.text = result.jitterMs.toInt().toString()
-                tvMetaInfo.text = String.format(
-                    Locale.US,
-                    "节点：%s · 本次耗流：%.2f MB",
-                    result.nodeName,
-                    result.bytesUsed / (1024.0 * 1024.0)
-                )
-
-                renderVerdict(result)
+                syncMainResultUI(result)
                 renderHistory()
+                renderScannedWifis(fromLiveScan = false)
                 WifiScoutWidgetProvider.refreshAllWidgets(this@MainActivity)
             } catch (e: Exception) {
                 tvPhase.text = "测速受阻"
-                toast(e.message ?: "测速失败，请检查网络连接")
+                toast(e.message ?: "测速失败")
             } finally {
                 setRunningState(false)
             }
         }
+    }
+
+    private fun syncMainResultUI(result: SpeedTestResult) {
+        lastResult = result
+        tvLiveSpeed.text = String.format(
+            Locale.US,
+            if (result.downloadMbps >= 100) "%.0f" else "%.1f",
+            result.downloadMbps
+        )
+        tvPhase.text = "${result.networkName} · ${result.verdict.tierLabel}"
+        tvDown.text = String.format(Locale.US, "%.1f", result.downloadMbps)
+        tvDownSub.text = String.format(Locale.US, "%.1f MB/s", result.downloadMbps / 8.0)
+        if (result.uploadMbps != null) {
+            tvUp.text = String.format(Locale.US, "%.1f", result.uploadMbps)
+            tvUpSub.text = String.format(Locale.US, "%.1f MB/s", result.uploadMbps / 8.0)
+        } else {
+            tvUp.text = "N/A"
+            tvUpSub.text = "仅测下载"
+        }
+        tvPing.text = result.pingMs.toInt().toString()
+        tvJitter.text = result.jitterMs.toInt().toString()
+        tvMetaInfo.text = String.format(
+            Locale.US,
+            "节点：%s · 耗流：%.2f MB",
+            result.nodeName,
+            result.bytesUsed / (1024.0 * 1024.0)
+        )
+        renderVerdict(result)
     }
 
     private fun renderVerdict(result: SpeedTestResult) {
@@ -434,6 +536,107 @@ class MainActivity : AppCompatActivity() {
         tvVerdictTier.setBackgroundResource(bgRes)
         tvVerdictTier.setTextColor(ContextCompat.getColor(this, colorRes))
         tvVerdictScore.setTextColor(ContextCompat.getColor(this, colorRes))
+    }
+
+    private fun renderScannedWifis(fromLiveScan: Boolean) {
+        scanListContainer.removeAllViews()
+        if (!NetworkInspector.hasFineLocationPermission(this) || !NetworkInspector.isLocationServiceEnabled(this)) {
+            tvScanStatus.text = "开启定位权限与 GPS 后，自动显示附近 Wi-Fi 列表"
+            return
+        }
+
+        val allScanned = NetworkInspector.getScannedWifis(this)
+        val starred = HistoryStore.getStarredSsids(this)
+        val currentSsid = currentNetInfo?.rawSsid
+        val historyByName = HistoryStore.loadHistory(this).associateBy { it.networkName }
+
+        if (allScanned.isEmpty()) {
+            tvScanStatus.text = "暂未发现周边 Wi-Fi，请点右上角「刷新」"
+            return
+        }
+
+        val filtered = if (onlyStarredFilter) {
+            allScanned.filter { starred.contains(it.ssid) || it.ssid == currentSsid }
+        } else {
+            allScanned
+        }
+
+        val sorted = filtered.sortedWith(
+            compareByDescending<ScannedWifi> { it.ssid == currentSsid }
+                .thenByDescending { starred.contains(it.ssid) }
+                .thenByDescending { it.bestRssiDbm }
+        )
+
+        val autoReady = WifiAutoSwitchService.isEnabled()
+        val timeTag = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        tvScanStatus.text = if (autoReady) {
+            "附近共 ${allScanned.size} 个 Wi-Fi ($timeTag) · 直接点击任意一个即可自动切过去并测速"
+        } else {
+            "附近共 ${allScanned.size} 个 Wi-Fi ($timeTag) · 开启右上角「自动切网」后点谁连谁"
+        }
+
+        val inflater = LayoutInflater.from(this)
+        for (wifi in sorted.take(18)) {
+            val row = inflater.inflate(R.layout.item_scanned_wifi, scanListContainer, false)
+            val btnStar = row.findViewById<TextView>(R.id.btnScanStar)
+            val tvSsid = row.findViewById<TextView>(R.id.tvScanSsid)
+            val tvBand = row.findViewById<TextView>(R.id.tvScanBand)
+            val tvSub = row.findViewById<TextView>(R.id.tvScanSub)
+            val tvAction = row.findViewById<TextView>(R.id.tvScanAction)
+
+            val isCurrent = wifi.ssid == currentSsid
+            val isStarred = starred.contains(wifi.ssid) || isCurrent
+
+            btnStar.text = if (isStarred) "★" else "☆"
+            btnStar.setTextColor(
+                ContextCompat.getColor(
+                    this,
+                    if (isStarred) R.color.accent_amber else R.color.text_muted
+                )
+            )
+            btnStar.setOnClickListener {
+                val now = HistoryStore.toggleStarredSsid(this, wifi.ssid)
+                toast(if (now) "已标记「${wifi.ssid}」加入一键轮测列表" else "已移出轮测标记")
+                renderScannedWifis(fromLiveScan = false)
+            }
+
+            tvSsid.text = wifi.ssid
+            tvBand.text = wifi.band
+
+            val hist = historyByName[wifi.ssid]
+            val subParts = mutableListOf("${wifi.bestRssiDbm}dBm ${wifi.signalLabel}")
+            if (hist != null) {
+                subParts.add(String.format(Locale.US, "实测↓%.1fM(%d分)", hist.downloadMbps, hist.verdict.score))
+            } else if (isStarred) {
+                subParts.add("已标常用")
+            }
+            tvSub.text = subParts.joinToString(" · ")
+
+            if (isCurrent) {
+                tvAction.text = "当前·测速"
+                tvAction.setBackgroundResource(R.drawable.bg_badge_green)
+                tvAction.setTextColor(ContextCompat.getColor(this, R.color.accent_green))
+            } else {
+                tvAction.text = "切换测速"
+                tvAction.setBackgroundResource(R.drawable.bg_badge_blue)
+                tvAction.setTextColor(ContextCompat.getColor(this, R.color.accent_sky))
+            }
+
+            row.setOnClickListener {
+                if (isCurrent) {
+                    startSpeedTest()
+                    return@setOnClickListener
+                }
+                val svc = WifiAutoSwitchService.instance
+                if (svc != null) {
+                    svc.switchAndTestSingle(wifi.ssid)
+                } else {
+                    showAccessibilitySetupDialog()
+                }
+            }
+
+            scanListContainer.addView(row)
+        }
     }
 
     private fun renderHistory() {
@@ -517,6 +720,15 @@ class MainActivity : AppCompatActivity() {
             tvScore.setTextColor(ContextCompat.getColor(this, scoreColor))
             tvTime.text = fmt.format(Date(item.timestamp))
 
+            // 点击排行榜里的任意 Wi-Fi，也可以直接切过去！
+            row.setOnClickListener {
+                if (item.kind == NetKind.WIFI && item.networkName != currentNetInfo?.rawSsid) {
+                    val svc = WifiAutoSwitchService.instance
+                    if (svc != null) svc.switchAndTestSingle(item.networkName)
+                    else showAccessibilitySetupDialog()
+                }
+            }
+
             historyContainer.addView(row)
         }
     }
@@ -538,108 +750,6 @@ class MainActivity : AppCompatActivity() {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("wifi_scout_report", text))
         toast("已复制测速结论，可直接发给电脑")
-    }
-
-    private fun renderScannedWifis(fromLiveScan: Boolean) {
-        scanListContainer.removeAllViews()
-        if (!NetworkInspector.hasFineLocationPermission(this) || !NetworkInspector.isLocationServiceEnabled(this)) {
-            tvScanStatus.text = "授予位置权限并打开 GPS 开关后，即可一键扫描附近 Wi-Fi 信号强度"
-            return
-        }
-
-        val allScanned = NetworkInspector.getScannedWifis(this)
-        val starred = HistoryStore.getStarredSsids(this)
-        val currentSsid = currentNetInfo?.rawSsid
-        val historyByName = HistoryStore.loadHistory(this).associateBy { it.networkName }
-
-        if (allScanned.isEmpty()) {
-            tvScanStatus.text = "暂未扫到周边 Wi-Fi，请点击「一键扫描信号强度」重试"
-            return
-        }
-
-        val filtered = if (onlyStarredFilter) {
-            allScanned.filter { starred.contains(it.ssid) || it.ssid == currentSsid }
-        } else {
-            allScanned
-        }
-
-        // 已星标(有密码/连过)优先置顶，组内按信号强度 dBm 降序
-        val sorted = filtered.sortedWith(
-            compareByDescending<ScannedWifi> { starred.contains(it.ssid) || it.ssid == currentSsid }
-                .thenByDescending { it.bestRssiDbm }
-                .thenByDescending { it.frequencyMhz }
-        )
-
-        val starredInRange = allScanned.count { starred.contains(it.ssid) || it.ssid == currentSsid }
-        val timeTag = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        tvScanStatus.text = if (onlyStarredFilter && sorted.isEmpty()) {
-            "附近共 ${allScanned.size} 个 Wi-Fi，尚未标记常用密码；请切回「全部」点左侧 ☆ 标记"
-        } else {
-            val tag = if (fromLiveScan) "刚刚扫描($timeTag)" else "最新结果($timeTag)"
-            "$tag · 附近共 ${allScanned.size} 个 Wi-Fi，其中已标 ★ 有 $starredInRange 个（按强度排序）"
-        }
-
-        val inflater = LayoutInflater.from(this)
-        val displayList = sorted.take(20)
-        for (wifi in displayList) {
-            val row = inflater.inflate(R.layout.item_scanned_wifi, scanListContainer, false)
-            val btnStar = row.findViewById<TextView>(R.id.btnScanStar)
-            val tvSsid = row.findViewById<TextView>(R.id.tvScanSsid)
-            val tvBand = row.findViewById<TextView>(R.id.tvScanBand)
-            val tvSub = row.findViewById<TextView>(R.id.tvScanSub)
-            val tvRssi = row.findViewById<TextView>(R.id.tvScanRssi)
-            val tvQuality = row.findViewById<TextView>(R.id.tvScanQuality)
-
-            val isStarred = starred.contains(wifi.ssid) || wifi.ssid == currentSsid
-            btnStar.text = if (isStarred) "★" else "☆"
-            btnStar.setTextColor(
-                ContextCompat.getColor(
-                    this,
-                    if (isStarred) R.color.accent_amber else R.color.text_muted
-                )
-            )
-            btnStar.setOnClickListener {
-                val now = HistoryStore.toggleStarredSsid(this, wifi.ssid)
-                toast(if (now) "已标记「${wifi.ssid}」为常用有密码 Wi-Fi" else "已取消标记「${wifi.ssid}」")
-                renderScannedWifis(fromLiveScan = false)
-            }
-
-            val isCurrent = wifi.ssid == currentSsid
-            tvSsid.text = if (isCurrent) "${wifi.ssid}（当前连接）" else wifi.ssid
-            tvBand.text = wifi.band
-
-            val hist = historyByName[wifi.ssid]
-            val subParts = mutableListOf<String>()
-            if (isStarred) subParts.add("★常用/有密码")
-            if (wifi.apCount > 1) subParts.add("${wifi.apCount}个热点")
-            if (hist != null) {
-                subParts.add(String.format(Locale.US, "曾测↓%.1fM(%d分)", hist.downloadMbps, hist.verdict.score))
-            } else {
-                subParts.add("点「快速切网」可切去测网速")
-            }
-            tvSub.text = subParts.joinToString(" · ")
-
-            tvRssi.text = "${wifi.bestRssiDbm} dBm"
-            val rssiColor = when {
-                wifi.bestRssiDbm >= -55 -> R.color.accent_green
-                wifi.bestRssiDbm >= -67 -> R.color.accent_sky
-                wifi.bestRssiDbm >= -76 -> R.color.accent_amber
-                else -> R.color.accent_red
-            }
-            tvRssi.setTextColor(ContextCompat.getColor(this, rssiColor))
-            tvQuality.text = "${wifi.signalLabel} ${wifi.signalPercent}%"
-
-            row.setOnClickListener {
-                if (!isCurrent) {
-                    toast("请在弹出面板选择「${wifi.ssid}」，切过去后点一键测速")
-                    openQuickWifiSwitcher()
-                } else {
-                    startSpeedTest()
-                }
-            }
-
-            scanListContainer.addView(row)
-        }
     }
 
     private fun toast(msg: String) {

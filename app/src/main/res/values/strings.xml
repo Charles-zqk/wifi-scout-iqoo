@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">WiFi侦察兵</string>
     <string name="widget_name">WiFi侦察兵 · 桌面测速小组件</string>
+    <string name="accessibility_desc">用于点击列表直接切换指定 Wi-Fi，以及一键自动轮流连接已保存的 Wi-Fi 进行测速并切回最快网络（仅在您主动点击按钮时运行）。</string>
 </resources>

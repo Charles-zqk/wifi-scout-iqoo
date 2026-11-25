@@ -11,7 +11,7 @@
         android:orientation="vertical"
         android:padding="14dp">
 
-        <!-- 顶部 WiFi 名称与信号卡 -->
+        <!-- 顶部当前网络状态栏 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -48,20 +48,20 @@
             </LinearLayout>
 
             <TextView
-                android:id="@+id/btnRefreshNet"
+                android:id="@+id/tvAutoEngineBadge"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
-                android:background="@drawable/bg_btn_secondary"
-                android:paddingHorizontal="12dp"
-                android:paddingVertical="8dp"
-                android:text="🔄 刷新"
-                android:textColor="@color/text_primary"
-                android:textSize="12sp"
+                android:background="@drawable/bg_badge_amber"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="6dp"
+                android:text="开启自动切网"
+                android:textColor="@color/accent_amber"
+                android:textSize="11sp"
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <!-- 位置权限/GPS 提示条（确保能读取真实 Wi-Fi SSID） -->
+        <!-- 权限/GPS 提示条（仅缺权限时显示） -->
         <LinearLayout
             android:id="@+id/permissionBanner"
             android:layout_width="match_parent"
@@ -76,7 +76,7 @@
                 android:id="@+id/tvPermissionReason"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="授予位置权限以直接显示 Wi-Fi 名称"
+                android:text="授予位置权限以显示 Wi-Fi 名称"
                 android:textColor="@color/accent_amber"
                 android:textSize="12sp" />
 
@@ -86,66 +86,66 @@
                 android:layout_height="40dp"
                 android:layout_marginTop="8dp"
                 android:background="@drawable/bg_btn_secondary"
-                android:text="一键授权显示 Wi-Fi 名称"
+                android:text="一键授权"
                 android:textAllCaps="false"
                 android:textColor="@color/accent_sky"
                 android:textSize="13sp"
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <!-- 主测速仪表盘卡片 -->
+        <!-- 自动轮测/切网进度条 -->
+        <LinearLayout
+            android:id="@+id/autoProgressBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_card"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="12dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tvAutoProgress"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="正在自动切网测速…"
+                android:textColor="@color/accent_green"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnStopAuto"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_badge_red"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="5dp"
+                android:text="停止"
+                android:textColor="@color/accent_red"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- 主操作与实时测速卡（极简双按钮） -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:background="@drawable/bg_card"
             android:orientation="vertical"
-            android:padding="16dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:id="@+id/btnModeToggle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/bg_btn_secondary"
-                    android:paddingHorizontal="10dp"
-                    android:paddingVertical="6dp"
-                    android:text="⚡ 省流模式"
-                    android:textColor="@color/accent_sky"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                <View
-                    android:layout_width="8dp"
-                    android:layout_height="1dp" />
-
-                <TextView
-                    android:id="@+id/btnNodeToggle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/bg_btn_secondary"
-                    android:paddingHorizontal="10dp"
-                    android:paddingVertical="6dp"
-                    android:text="🌐 节点:自动优选"
-                    android:textColor="@color/text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
+            android:padding="15dp">
 
             <TextView
                 android:id="@+id/tvPhase"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
                 android:gravity="center"
-                android:text="准备就绪 · 点击下方一键测速"
+                android:text="点下方一键轮测，自动切网找出附近最快 Wi-Fi"
                 android:textColor="@color/accent_sky"
-                android:textSize="13sp"
+                android:textSize="12sp"
                 android:textStyle="bold" />
 
             <LinearLayout
@@ -161,17 +161,17 @@
                     android:layout_height="wrap_content"
                     android:text="0.0"
                     android:textColor="@color/text_primary"
-                    android:textSize="54sp"
+                    android:textSize="50sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
-                    android:layout_marginBottom="10dp"
+                    android:layout_marginBottom="9dp"
                     android:text="Mbps"
                     android:textColor="@color/text_muted"
-                    android:textSize="15sp"
+                    android:textSize="14sp"
                     android:textStyle="bold" />
             </LinearLayout>
 
@@ -179,7 +179,7 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
+                android:layout_marginTop="10dp"
                 android:orientation="horizontal">
 
                 <LinearLayout
@@ -190,7 +190,7 @@
                     android:background="@drawable/bg_tile"
                     android:gravity="center"
                     android:orientation="vertical"
-                    android:paddingVertical="10dp">
+                    android:paddingVertical="8dp">
 
                     <TextView
                         android:layout_width="wrap_content"
@@ -205,7 +205,7 @@
                         android:layout_height="wrap_content"
                         android:text="--"
                         android:textColor="@color/text_primary"
-                        android:textSize="16sp"
+                        android:textSize="15sp"
                         android:textStyle="bold" />
 
                     <TextView
@@ -225,7 +225,7 @@
                     android:background="@drawable/bg_tile"
                     android:gravity="center"
                     android:orientation="vertical"
-                    android:paddingVertical="10dp">
+                    android:paddingVertical="8dp">
 
                     <TextView
                         android:layout_width="wrap_content"
@@ -240,7 +240,7 @@
                         android:layout_height="wrap_content"
                         android:text="--"
                         android:textColor="@color/text_primary"
-                        android:textSize="16sp"
+                        android:textSize="15sp"
                         android:textStyle="bold" />
 
                     <TextView
@@ -260,7 +260,7 @@
                     android:background="@drawable/bg_tile"
                     android:gravity="center"
                     android:orientation="vertical"
-                    android:paddingVertical="10dp">
+                    android:paddingVertical="8dp">
 
                     <TextView
                         android:layout_width="wrap_content"
@@ -275,7 +275,7 @@
                         android:layout_height="wrap_content"
                         android:text="--"
                         android:textColor="@color/text_primary"
-                        android:textSize="16sp"
+                        android:textSize="15sp"
                         android:textStyle="bold" />
 
                     <TextView
@@ -293,7 +293,7 @@
                     android:background="@drawable/bg_tile"
                     android:gravity="center"
                     android:orientation="vertical"
-                    android:paddingVertical="10dp">
+                    android:paddingVertical="8dp">
 
                     <TextView
                         android:layout_width="wrap_content"
@@ -308,7 +308,7 @@
                         android:layout_height="wrap_content"
                         android:text="--"
                         android:textColor="@color/text_primary"
-                        android:textSize="16sp"
+                        android:textSize="15sp"
                         android:textStyle="bold" />
 
                     <TextView
@@ -320,17 +320,64 @@
                 </LinearLayout>
             </LinearLayout>
 
+            <!-- 主按钮 1：一键自动轮测所有已保存 Wi-Fi -->
             <androidx.appcompat.widget.AppCompatButton
-                android:id="@+id/btnStartTest"
+                android:id="@+id/btnAutoBatchTest"
                 android:layout_width="match_parent"
                 android:layout_height="52dp"
-                android:layout_marginTop="16dp"
+                android:layout_marginTop="14dp"
                 android:background="@drawable/bg_btn_primary"
-                android:text="▶ 一键测速 · 检查是否适合电脑连"
+                android:text="🤖 一键轮测已存 Wi-Fi（自动切网找最快）"
                 android:textAllCaps="false"
                 android:textColor="@color/btn_text_dark"
                 android:textSize="15sp"
                 android:textStyle="bold" />
+
+            <!-- 次按钮 2：仅测当前网络 + 节点/模式轻巧开关 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <androidx.appcompat.widget.AppCompatButton
+                    android:id="@+id/btnStartTest"
+                    android:layout_width="0dp"
+                    android:layout_height="42dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1.35"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:text="⚡ 仅测当前网络"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btnModeToggle"
+                    android:layout_width="0dp"
+                    android:layout_height="42dp"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="0.8"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:text="省流"
+                    android:textColor="@color/accent_sky"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btnNodeToggle"
+                    android:layout_width="0dp"
+                    android:layout_height="42dp"
+                    android:layout_weight="0.85"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:text="自动节点"
+                    android:textColor="@color/text_muted"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/tvMetaInfo"
@@ -338,7 +385,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:gravity="center"
-                android:text="可在手机桌面长按添加「WiFi侦察兵」桌面小组件"
+                android:text="点击下方任意 Wi-Fi 可直接自动切过去并测速"
                 android:textColor="@color/text_muted"
                 android:textSize="11sp" />
         </LinearLayout>
@@ -394,7 +441,7 @@
                 android:layout_marginTop="8dp"
                 android:text="强烈推荐电脑直接连接！"
                 android:textColor="@color/text_primary"
-                android:textSize="17sp"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -403,23 +450,23 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:textColor="@color/text_muted"
-                android:textSize="13sp" />
+                android:textSize="12sp" />
 
             <TextView
                 android:id="@+id/tvCapSummary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="8dp"
                 android:background="@drawable/bg_tile"
-                android:padding="10dp"
+                android:padding="9dp"
                 android:textColor="@color/text_primary"
                 android:textSize="12sp" />
 
             <androidx.appcompat.widget.AppCompatButton
                 android:id="@+id/btnCopyReport"
                 android:layout_width="match_parent"
-                android:layout_height="42dp"
-                android:layout_marginTop="10dp"
+                android:layout_height="40dp"
+                android:layout_marginTop="8dp"
                 android:background="@drawable/bg_btn_secondary"
                 android:text="📋 复制测速结论给电脑"
                 android:textAllCaps="false"
@@ -428,7 +475,7 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <!-- 附近 Wi-Fi 信号强度一键扫描卡 -->
+        <!-- 附近 Wi-Fi 列表（点一下直接切过去并测速！） -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -447,53 +494,34 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="附近 Wi-Fi 信号强度"
+                    android:text="附近 Wi-Fi（点击直接切换）"
                     android:textColor="@color/text_primary"
                     android:textSize="15sp"
                     android:textStyle="bold" />
 
                 <TextView
-                    android:id="@+id/btnSwitchWifiPanel"
+                    android:id="@+id/btnFilterStarred"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
                     android:background="@drawable/bg_btn_secondary"
-                    android:paddingHorizontal="9dp"
+                    android:paddingHorizontal="8dp"
                     android:paddingVertical="5dp"
-                    android:text="🔀 快速切网"
-                    android:textColor="@color/text_primary"
+                    android:text="★ 全部"
+                    android:textColor="@color/accent_amber"
                     android:textSize="11sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:orientation="horizontal">
-
-                <androidx.appcompat.widget.AppCompatButton
-                    android:id="@+id/btnScanWifis"
-                    android:layout_width="0dp"
-                    android:layout_height="40dp"
-                    android:layout_marginEnd="8dp"
-                    android:layout_weight="1.2"
-                    android:background="@drawable/bg_btn_primary"
-                    android:text="📡 一键扫描信号强度"
-                    android:textAllCaps="false"
-                    android:textColor="@color/btn_text_dark"
-                    android:textSize="13sp"
                     android:textStyle="bold" />
 
                 <TextView
-                    android:id="@+id/btnFilterStarred"
-                    android:layout_width="0dp"
-                    android:layout_height="40dp"
-                    android:layout_weight="1"
+                    android:id="@+id/btnScanWifis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
                     android:background="@drawable/bg_btn_secondary"
-                    android:gravity="center"
-                    android:text="★ 全部(已标置顶)"
-                    android:textColor="@color/accent_amber"
-                    android:textSize="12sp"
+                    android:paddingHorizontal="8dp"
+                    android:paddingVertical="5dp"
+                    android:text="🔄 刷新"
+                    android:textColor="@color/accent_sky"
+                    android:textSize="11sp"
                     android:textStyle="bold" />
             </LinearLayout>
 
@@ -501,8 +529,8 @@
                 android:id="@+id/tvScanStatus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="点「一键扫描」查看附近所有 Wi-Fi 强弱；点左侧 ☆ 可标记你有密码的常用 Wi-Fi（连过的会自动标 ★）"
+                android:layout_marginTop="6dp"
+                android:text="正在加载附近 Wi-Fi…"
                 android:textColor="@color/text_muted"
                 android:textSize="11sp" />
 
@@ -514,7 +542,7 @@
                 android:orientation="vertical" />
         </LinearLayout>
 
-        <!-- 附近网络对比排行榜 -->
+        <!-- 实测网速对比榜 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -534,7 +562,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="附近 Wi-Fi / 流量对比榜"
+                    android:text="实测网速排行榜"
                     android:textColor="@color/text_primary"
                     android:textSize="15sp"
                     android:textStyle="bold" />
@@ -566,8 +594,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center"
-                android:paddingVertical="18dp"
-                android:text="依次切换附近几个 Wi-Fi 或手机流量测速，\n系统会自动记录真实 Wi-Fi 名称并标出最适合电脑连的那一个。"
+                android:paddingVertical="14dp"
+                android:text="点击上方「一键轮测已存 Wi-Fi」，自动把附近能连的 Wi-Fi 测完并按速度排序。"
                 android:textColor="@color/text_muted"
                 android:textSize="12sp" />
 
