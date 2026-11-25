@@ -10,6 +10,7 @@ object HistoryStore {
     private const val KEY_MODE = "test_mode"
     private const val KEY_NODE = "node_pref"
     private const val KEY_STARRED = "starred_ssids"
+    private const val KEY_NO_PASS = "no_password_ssids"
 
     fun saveResult(context: Context, result: SpeedTestResult) {
         val list = loadHistory(context).toMutableList()
@@ -97,11 +98,43 @@ object HistoryStore {
             false
         } else {
             next.add(clean)
+            clearNoPasswordSsid(context, clean)
             true
         }
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit().putStringSet(KEY_STARRED, next).apply()
         return nowStarred
+    }
+
+    fun getNoPasswordSsids(context: Context): Set<String> {
+        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getStringSet(KEY_NO_PASS, emptySet())
+            ?.toSet()
+            ?: emptySet()
+    }
+
+    fun markNoPasswordSsid(context: Context, ssid: String) {
+        val clean = ssid.trim()
+        if (clean.isEmpty()) return
+        val next = getNoPasswordSsids(context).toMutableSet()
+        if (next.add(clean)) {
+            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                .edit().putStringSet(KEY_NO_PASS, next).apply()
+        }
+    }
+
+    fun clearNoPasswordSsid(context: Context, ssid: String) {
+        val clean = ssid.trim()
+        val next = getNoPasswordSsids(context).toMutableSet()
+        if (next.remove(clean)) {
+            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                .edit().putStringSet(KEY_NO_PASS, next).apply()
+        }
+    }
+
+    fun clearAllNoPasswordSsids(context: Context) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit().remove(KEY_NO_PASS).apply()
     }
 
     private fun toJson(r: SpeedTestResult): JSONObject = JSONObject().apply {

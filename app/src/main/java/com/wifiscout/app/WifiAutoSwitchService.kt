@@ -21,13 +21,24 @@ import java.util.Locale
 data class AutoTaskStatus(
     val running: Boolean,
     val message: String,
-    val finishedSummary: String? = null
+    val finishedSummary: String? = null,
+    val liveMbps: Double? = null,
+    val livePhase: String? = null,
+    val latestCompleted: SpeedTestResult? = null
 )
 
+private enum class ClickOutcome {
+    CLICKED,
+    NEEDS_PASSWORD,
+    NOT_FOUND
+}
+
 /**
- * 基于 Android 官方无障碍服务（免 Root）实现：
- * 1. 点列表任意 Wi-Fi → 自动切过去并立即测速
- * 2. 一键自动巡检附近所有已保存密码的 Wi-Fi → 挨个切网测速 → 自动切回最快的那一个
+ * v1.4 升级版无障碍自动切网引擎（方案 B：闪切 1 秒瞬回 App + 全量轮测所有附近有密码 Wi-Fi）：
+ * 1. 点完系统 Wi-Fi 项后 1 秒内立刻弹回 App，等待连接与实时测速全程停留在 App 页面展示；
+ * 2. 一键轮测自动覆盖「当前连着 + 已标星 + 系统已保存 + 附近信号可用」的全部 Wi-Fi，
+ *    遇到没存密码的自动识别密码框并 0.7 秒秒跳过、记住不再重复试；
+ * 3. 全部测完后自动闪切回评分最高的那一个 Wi-Fi。
  */
 class WifiAutoSwitchService : AccessibilityService() {
 
@@ -41,7 +52,7 @@ class WifiAutoSwitchService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // 由协程按需主动读取当前窗口树，不在日常浏览时做任何消耗
+        // 按需主动查询窗口节点，平时零耗电
     }
 
     override fun onInterrupt() {
@@ -57,57 +68,66 @@ class WifiAutoSwitchService : AccessibilityService() {
     fun cancelRunningTask() {
         activeJob?.cancel()
         activeJob = null
-        notifyStatus(AutoTaskStatus(false, "已停止自动切网任务"))
+        notifyStatus(AutoTaskStatus(false, "已停止自动轮测"))
     }
 
-    /** 直接切换到单个指定 Wi-Fi，连上后自动跳回 App 并测速 */
+    /** 点击列表单个 Wi-Fi：闪切 1 秒瞬回 App → 等待连上 → 实时测速 */
     fun switchAndTestSingle(targetSsid: String) {
         activeJob?.cancel()
         activeJob = serviceScope.launch {
             try {
-                notifyStatus(AutoTaskStatus(true, "正在自动切换到「$targetSsid」…"))
-                val connected = switchToSsidInternal(targetSsid)
-                bringAppToFront()
+                val alreadyOn = NetworkInspector.inspect(this@WifiAutoSwitchService).rawSsid == targetSsid
+                if (!alreadyOn) {
+                    notifyStatus(AutoTaskStatus(true, "正在闪切到「$targetSsid」…", livePhase = "正在切换 Wi-Fi…"))
+                    val outcome = flashClickSsidAndReturnToApp(targetSsid)
+                    when (outcome) {
+                        ClickOutcome.NEEDS_PASSWORD -> {
+                            HistoryStore.markNoPasswordSsid(this@WifiAutoSwitchService, targetSsid)
+                            notifyStatus(AutoTaskStatus(false, "「$targetSsid」未保存密码，无法自动连接"))
+                            return@launch
+                        }
+                        ClickOutcome.NOT_FOUND -> {
+                            notifyStatus(AutoTaskStatus(false, "未在系统列表找到「$targetSsid」，请稍后重试"))
+                            return@launch
+                        }
+                        ClickOutcome.CLICKED -> Unit
+                    }
 
-                if (!connected) {
-                    notifyStatus(
-                        AutoTaskStatus(
-                            false,
-                            "未能自动连上「$targetSsid」（可能未保存密码或超出范围）"
-                        )
-                    )
-                    return@launch
+                    notifyStatus(AutoTaskStatus(true, "已返回 App，等待连上「$targetSsid」…", livePhase = "等待连接「$targetSsid」…"))
+                    val connected = waitForWifiConnected(targetSsid, timeoutMs = 10_000L)
+                    if (!connected) {
+                        notifyStatus(AutoTaskStatus(false, "连接「$targetSsid」超时（可能密码失效或信号太弱）"))
+                        return@launch
+                    }
                 }
 
                 HistoryStore.markStarredSsid(this@WifiAutoSwitchService, targetSsid)
-                notifyStatus(AutoTaskStatus(true, "已连上「$targetSsid」，正在极速测速…"))
-                delay(700)
+                HistoryStore.clearNoPasswordSsid(this@WifiAutoSwitchService, targetSsid)
 
-                val netInfo = NetworkInspector.inspect(this@WifiAutoSwitchService)
-                val result = SpeedTestEngine.runTest(
-                    networkInfo = netInfo,
-                    mode = HistoryStore.getMode(this@WifiAutoSwitchService),
-                    nodePref = HistoryStore.getNodePref(this@WifiAutoSwitchService),
-                    onProgress = { ev ->
-                        val speedTxt = if (ev.currentMbps > 0.1) {
-                            String.format(Locale.US, " %.1f Mbps", ev.currentMbps)
-                        } else ""
-                        notifyStatus(AutoTaskStatus(true, "「$targetSsid」${ev.phase}$speedTxt"))
-                    }
-                )
-                HistoryStore.saveResult(this@WifiAutoSwitchService, result)
-                WifiScoutWidgetProvider.refreshAllWidgets(this@WifiAutoSwitchService)
-
-                val summary = String.format(
-                    Locale.US,
-                    "✅ 「%s」测速完成：↓%.1fM · 延迟%dms · %d分（%s）",
-                    result.networkName,
-                    result.downloadMbps,
-                    result.pingMs.toInt(),
-                    result.verdict.score,
-                    result.verdict.title
-                )
-                notifyStatus(AutoTaskStatus(false, summary, finishedSummary = summary))
+                val res = runSpeedTestWithLiveUpdates(targetSsid, prefix = "")
+                if (res != null) {
+                    val summary = String.format(
+                        Locale.US,
+                        "✅ 「%s」测速完成：↓%.1fM · 延迟%dms · %d分（%s）",
+                        res.networkName,
+                        res.downloadMbps,
+                        res.pingMs.toInt(),
+                        res.verdict.score,
+                        res.verdict.title
+                    )
+                    notifyStatus(
+                        AutoTaskStatus(
+                            running = false,
+                            message = summary,
+                            finishedSummary = summary,
+                            liveMbps = res.downloadMbps,
+                            livePhase = "${res.networkName} · ${res.verdict.tierLabel}",
+                            latestCompleted = res
+                        )
+                    )
+                } else {
+                    notifyStatus(AutoTaskStatus(false, "「$targetSsid」已连上但无法访问外网"))
+                }
             } catch (e: Exception) {
                 bringAppToFront()
                 notifyStatus(AutoTaskStatus(false, "切网/测速中断：${e.message ?: "请重试"}"))
@@ -115,124 +135,256 @@ class WifiAutoSwitchService : AccessibilityService() {
         }
     }
 
-    /** 一键自动轮测附近所有已保存密码（或已标星）的 Wi-Fi，并自动切回最快的那一个 */
-    fun runBatchInspectSavedWifis() {
+    /**
+     * 一键全自动轮测所有附近可连接的 Wi-Fi：
+     * - onlyStarred=false（默认）：测当前 + 已标星 + 系统已保存 + 所有附近信号 >= -80dBm 的 Wi-Fi（没存密码的自动 0.7 秒秒跳过并记住）
+     * - onlyStarred=true：只轮测已标 ★ 的 Wi-Fi
+     */
+    fun runBatchInspectSavedWifis(onlyStarred: Boolean = false) {
         activeJob?.cancel()
         activeJob = serviceScope.launch {
             try {
-                notifyStatus(AutoTaskStatus(true, "正在发现附近已保存密码的 Wi-Fi…"))
+                notifyStatus(AutoTaskStatus(true, "正在扫描附近全部 Wi-Fi…", livePhase = "准备全量轮测…"))
+                NetworkInspector.triggerWifiScan(this@WifiAutoSwitchService)
+                delay(400)
 
-                // 1. 打开系统 Wi-Fi 页，自动识别屏幕上标注为「已保存 / 已连接」的 Wi-Fi
-                openSystemWifiSettings()
-                delay(1200)
-                val discoveredFromSettings = discoverSavedSsidsOnScreen()
-                for (s in discoveredFromSettings) {
-                    HistoryStore.markStarredSsid(this@WifiAutoSwitchService, s)
-                }
-
-                // 2. 结合系统扫描结果 + 已标星/连过的列表，确定附近可测队列
                 val scanned = NetworkInspector.getScannedWifis(this@WifiAutoSwitchService)
                 val scannedMap = scanned.associateBy { it.ssid }
-                val starred = HistoryStore.getStarredSsids(this@WifiAutoSwitchService)
                 val currentSsid = NetworkInspector.inspect(this@WifiAutoSwitchService).rawSsid
+                val starred = HistoryStore.getStarredSsids(this@WifiAutoSwitchService)
+                val noPassSet = HistoryStore.getNoPasswordSsids(this@WifiAutoSwitchService)
 
-                val targets = LinkedHashSet<String>()
-                if (!currentSsid.isNullOrBlank()) targets.add(currentSsid)
-                for (s in discoveredFromSettings) targets.add(s)
-                for (s in starred) {
-                    if (scannedMap.isEmpty() || scannedMap.containsKey(s)) {
-                        targets.add(s)
-                    }
+                // 先闪进系统 Wi-Fi 页快速读取屏幕上的「已保存/已连接」列表，再立刻弹回 App
+                val discoveredSaved = discoverSavedOnSystemWifiAndReturn()
+                for (s in discoveredSaved) {
+                    HistoryStore.markStarredSsid(this@WifiAutoSwitchService, s)
+                    HistoryStore.clearNoPasswordSsid(this@WifiAutoSwitchService, s)
                 }
 
-                // 按信号强度排序，最多连测前 6 个，避免耗时过长
-                val queue = targets
-                    .sortedByDescending { scannedMap[it]?.bestRssiDbm ?: -70 }
-                    .take(6)
+                // 组装完整待测队列（去重、不设 2 个上限！）
+                val orderedQueue = LinkedHashSet<String>()
+                // 1. 当前已连的 Wi-Fi 排第 1（不用切网，直接在 App 页面先测！）
+                if (!currentSsid.isNullOrBlank()) orderedQueue.add(currentSsid)
 
+                // 2. 附近可扫到的所有已标 ★ 或系统标记已保存的 Wi-Fi
+                val knownInRange = (starred + discoveredSaved)
+                    .filter { it.isNotBlank() && (scannedMap.isEmpty() || scannedMap.containsKey(it)) }
+                    .sortedByDescending { scannedMap[it]?.bestRssiDbm ?: -65 }
+                orderedQueue.addAll(knownInRange)
+
+                // 3. 若未勾选「仅测已标」，把附近信号可用 (>= -80dBm) 且未被标记过「无密码」的 Wi-Fi 也全部纳入探测
+                if (!onlyStarred) {
+                    val otherStrong = scanned
+                        .filter { it.bestRssiDbm >= -80 && !noPassSet.contains(it.ssid) }
+                        .sortedByDescending { it.bestRssiDbm }
+                        .map { it.ssid }
+                    orderedQueue.addAll(otherStrong)
+                }
+
+                val queue = orderedQueue.toList()
                 if (queue.isEmpty()) {
-                    bringAppToFront()
                     notifyStatus(
                         AutoTaskStatus(
                             false,
-                            "未发现已保存的附近 Wi-Fi，请先在下方列表点 ☆ 标星或手动连过一次"
+                            "附近未扫到可测的 Wi-Fi，请确认 GPS 定位已打开并稍后重试"
                         )
                     )
                     return@launch
                 }
 
                 val results = mutableListOf<SpeedTestResult>()
+                var skippedNoPassword = 0
 
                 for ((index, ssid) in queue.withIndex()) {
-                    val stepTag = "(${index + 1}/${queue.size})"
-                    notifyStatus(AutoTaskStatus(true, "$stepTag 正在切换并连接「$ssid」…"))
-
+                    val step = "(${index + 1}/${queue.size})"
                     val alreadyOn = NetworkInspector.inspect(this@WifiAutoSwitchService).rawSsid == ssid
-                    val connected = if (alreadyOn) true else switchToSsidInternal(ssid)
-                    if (!connected) {
-                        notifyStatus(AutoTaskStatus(true, "$stepTag 跳过「$ssid」（未保存密码或连接超时）"))
-                        delay(500)
-                        continue
+
+                    if (!alreadyOn) {
+                        notifyStatus(
+                            AutoTaskStatus(
+                                running = true,
+                                message = "$step 闪切至「$ssid」…（已测通 ${results.size} 个）",
+                                livePhase = "$step 切换中：$ssid"
+                            )
+                        )
+                        val outcome = flashClickSsidAndReturnToApp(ssid)
+                        if (outcome == ClickOutcome.NEEDS_PASSWORD) {
+                            skippedNoPassword++
+                            HistoryStore.markNoPasswordSsid(this@WifiAutoSwitchService, ssid)
+                            notifyStatus(
+                                AutoTaskStatus(
+                                    running = true,
+                                    message = "$step 「$ssid」未保存密码，已自动跳过 → 继续测下一个",
+                                    livePhase = "跳过无密码：$ssid"
+                                )
+                            )
+                            delay(350)
+                            continue
+                        }
+                        if (outcome == ClickOutcome.NOT_FOUND) {
+                            notifyStatus(
+                                AutoTaskStatus(
+                                    running = true,
+                                    message = "$step 未找到「$ssid」，自动跳过 → 继续测下一个",
+                                    livePhase = "跳过：$ssid"
+                                )
+                            )
+                            delay(300)
+                            continue
+                        }
+
+                        // 已经回到 App 页面！在 App 里展示等待连接进度
+                        notifyStatus(
+                            AutoTaskStatus(
+                                running = true,
+                                message = "$step 正在连接「$ssid」…（已测通 ${results.size} 个）",
+                                livePhase = "$step 等待连上 $ssid…"
+                            )
+                        )
+                        val connected = waitForWifiConnected(ssid, timeoutMs = 9500L)
+                        if (!connected) {
+                            notifyStatus(
+                                AutoTaskStatus(
+                                    running = true,
+                                    message = "$step 「$ssid」连接超时，自动跳过 → 继续测下一个",
+                                    livePhase = "连接超时：$ssid"
+                                )
+                            )
+                            delay(350)
+                            continue
+                        }
                     }
 
+                    // 连上成功！自动标星为「已存密码 Wi-Fi」，以后可一键只测这些
                     HistoryStore.markStarredSsid(this@WifiAutoSwitchService, ssid)
-                    notifyStatus(AutoTaskStatus(true, "$stepTag 已连「$ssid」，快速测速中…"))
-                    delay(800)
+                    HistoryStore.clearNoPasswordSsid(this@WifiAutoSwitchService, ssid)
 
-                    try {
-                        val netInfo = NetworkInspector.inspect(this@WifiAutoSwitchService)
-                        val res = SpeedTestEngine.runTest(
-                            networkInfo = netInfo,
-                            mode = TestMode.LITE,
-                            nodePref = HistoryStore.getNodePref(this@WifiAutoSwitchService),
-                            onProgress = { ev ->
-                                val sp = if (ev.currentMbps > 0.1) {
-                                    String.format(Locale.US, " %.1fM", ev.currentMbps)
-                                } else ""
-                                notifyStatus(AutoTaskStatus(true, "$stepTag 测「$ssid」${ev.phase}$sp"))
-                            }
-                        )
-                        HistoryStore.saveResult(this@WifiAutoSwitchService, res)
+                    // 在 App 界面实时测速
+                    val res = runSpeedTestWithLiveUpdates(ssid, prefix = "$step ")
+                    if (res != null) {
                         results.add(res)
-                    } catch (_: Exception) {
-                        // 某个 Wi-Fi 无外网权限时继续测下一个
+                    } else {
+                        notifyStatus(
+                            AutoTaskStatus(
+                                running = true,
+                                message = "$step 「$ssid」无法访问外网，自动继续下一个…",
+                                livePhase = "无外网：$ssid"
+                            )
+                        )
+                        delay(350)
                     }
                 }
 
                 if (results.isEmpty()) {
                     bringAppToFront()
-                    notifyStatus(AutoTaskStatus(false, "巡检结束，但所有候选 Wi-Fi 均无法连外网"))
+                    notifyStatus(
+                        AutoTaskStatus(
+                            false,
+                            "已检查 ${queue.size} 个 Wi-Fi（跳过无密码 $skippedNoPassword 个），但没有可连外网的 Wi-Fi"
+                        )
+                    )
                     return@launch
                 }
 
-                // 3. 找出评分最高的 Wi-Fi，并自动切回它！
+                // 选出评分最高的 Wi-Fi，自动闪切回去并停留在 App 页面
                 val best = results.maxWith(
                     compareBy<SpeedTestResult> { it.verdict.score }
                         .thenBy { it.downloadMbps }
                 )
                 val nowSsid = NetworkInspector.inspect(this@WifiAutoSwitchService).rawSsid
                 if (nowSsid != best.networkName) {
-                    notifyStatus(AutoTaskStatus(true, "巡检完成！正在自动切回最快 Wi-Fi「${best.networkName}」…"))
-                    switchToSsidInternal(best.networkName)
+                    notifyStatus(
+                        AutoTaskStatus(
+                            running = true,
+                            message = "全部测完！正在自动切回最快 Wi-Fi「${best.networkName}」…",
+                            livePhase = "切回最快：${best.networkName}"
+                        )
+                    )
+                    flashClickSsidAndReturnToApp(best.networkName)
+                    waitForWifiConnected(best.networkName, timeoutMs = 8000L)
                 }
 
                 bringAppToFront()
                 WifiScoutWidgetProvider.refreshAllWidgets(this@WifiAutoSwitchService)
 
+                val skipHint = if (skippedNoPassword > 0) "（自动跳过 $skippedNoPassword 个未存密码）" else ""
                 val summary = String.format(
                     Locale.US,
-                    "🏆 已轮测 %d 个 Wi-Fi！最快是「%s」（↓%.1fM · 延迟%dms · %d分），已自动切好，电脑直接连它！",
+                    "🏆 共实测 %d 个有密码 Wi-Fi%s！最快是「%s」（↓%.1fM · 延迟%dms · %d分），已切好，电脑直接连！",
                     results.size,
+                    skipHint,
                     best.networkName,
                     best.downloadMbps,
                     best.pingMs.toInt(),
                     best.verdict.score
                 )
-                notifyStatus(AutoTaskStatus(false, summary, finishedSummary = summary))
+                notifyStatus(
+                    AutoTaskStatus(
+                        running = false,
+                        message = summary,
+                        finishedSummary = summary,
+                        liveMbps = best.downloadMbps,
+                        livePhase = "最佳：${best.networkName} · ${best.verdict.tierLabel}",
+                        latestCompleted = best
+                    )
+                )
             } catch (e: Exception) {
                 bringAppToFront()
-                notifyStatus(AutoTaskStatus(false, "自动巡检已停止：${e.message ?: ""}"))
+                notifyStatus(AutoTaskStatus(false, "自动轮测已停止：${e.message ?: ""}"))
             }
+        }
+    }
+
+    private suspend fun runSpeedTestWithLiveUpdates(ssid: String, prefix: String): SpeedTestResult? {
+        notifyStatus(
+            AutoTaskStatus(
+                running = true,
+                message = "${prefix}已连上「$ssid」，正在快速测速…",
+                liveMbps = 0.0,
+                livePhase = "${prefix}测速中：$ssid"
+            )
+        )
+        delay(650)
+        return try {
+            val netInfo = NetworkInspector.inspect(this@WifiAutoSwitchService)
+            val res = SpeedTestEngine.runTest(
+                networkInfo = netInfo,
+                mode = TestMode.LITE,
+                nodePref = HistoryStore.getNodePref(this@WifiAutoSwitchService),
+                onProgress = { ev ->
+                    val sp = if (ev.currentMbps > 0.1) {
+                        String.format(Locale.US, " %.1f Mbps", ev.currentMbps)
+                    } else ""
+                    notifyStatus(
+                        AutoTaskStatus(
+                            running = true,
+                            message = "${prefix}正在测「$ssid」${ev.phase}$sp",
+                            liveMbps = ev.currentMbps,
+                            livePhase = "${prefix}$ssid · ${ev.phase}"
+                        )
+                    )
+                }
+            )
+            HistoryStore.saveResult(this@WifiAutoSwitchService, res)
+            WifiScoutWidgetProvider.refreshAllWidgets(this@WifiAutoSwitchService)
+            notifyStatus(
+                AutoTaskStatus(
+                    running = true,
+                    message = String.format(
+                        Locale.US,
+                        "${prefix}「%s」完成：↓%.1fM (%d分)",
+                        ssid,
+                        res.downloadMbps,
+                        res.verdict.score
+                    ),
+                    liveMbps = res.downloadMbps,
+                    livePhase = "${prefix}$ssid 完成",
+                    latestCompleted = res
+                )
+            )
+            res
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -254,48 +406,79 @@ class WifiAutoSwitchService : AccessibilityService() {
         startActivity(intent)
     }
 
-    /** 在 OriginOS / Android 系统 Wi-Fi 页面中自动查找目标 SSID 并点击连接 */
-    private suspend fun switchToSsidInternal(targetSsid: String): Boolean {
-        if (NetworkInspector.inspect(this).rawSsid == targetSsid) {
-            return waitForWifiConnected(targetSsid, timeoutMs = 3000L)
-        }
-
+    /**
+     * 闪切核心：打开系统 Wi-Fi 页 → 自动查找并点击目标 SSID → 检测密码框 → 1 秒内立刻弹回 App！
+     */
+    private suspend fun flashClickSsidAndReturnToApp(targetSsid: String): ClickOutcome {
         openSystemWifiSettings()
-        delay(1000)
+        delay(850)
 
         var clicked = false
-        for (scrollAttempt in 0..4) {
+        for (scrollAttempt in 0..5) {
             val root = rootInActiveWindow
             if (root != null) {
+                // 如果不小心不在设置页，重新唤起系统 Wi-Fi 页
+                val pkg = root.packageName?.toString().orEmpty()
+                if (pkg == packageName) {
+                    openSystemWifiSettings()
+                    delay(750)
+                    continue
+                }
                 val targetNode = findExactTextNode(root, targetSsid)
                 if (targetNode != null) {
                     clicked = clickNodeOrParent(targetNode)
                     if (clicked) break
                 }
-                if (scrollAttempt < 4) {
+                if (scrollAttempt < 5) {
                     scrollListForward(root)
                 }
             }
-            delay(550)
+            delay(450)
         }
 
-        if (!clicked) return false
+        if (!clicked) {
+            bringAppToFront()
+            return ClickOutcome.NOT_FOUND
+        }
 
-        // 等待 700ms：若弹出密码框说明没存密码，直接退出；若弹出「连接」确认按钮则自动点连接
-        delay(750)
+        // 短暂等待 650ms 判断是否弹出密码输入框或「连接」确认按钮
+        delay(650)
         val afterRoot = rootInActiveWindow
         if (afterRoot != null) {
-            if (containsPasswordInput(afterRoot)) {
+            if (containsPasswordPrompt(afterRoot)) {
+                // 关闭密码框并立刻返回 App
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                return false
+                delay(200)
+                bringAppToFront()
+                return ClickOutcome.NEEDS_PASSWORD
             }
             val connectBtn = findButtonByTexts(afterRoot, listOf("连接", "Connect", "确定"))
             if (connectBtn != null) {
                 clickNodeOrParent(connectBtn)
+                delay(250)
             }
         }
 
-        return waitForWifiConnected(targetSsid, timeoutMs = 9500L)
+        // 点完立刻弹回 App 页面！后续等待连上和测速全部在 App 界面内完成
+        bringAppToFront()
+        return ClickOutcome.CLICKED
+    }
+
+    /** 闪扫系统 Wi-Fi 页上带「已保存/已连接」字样的网络，扫完立即返回 App */
+    private suspend fun discoverSavedOnSystemWifiAndReturn(): List<String> {
+        openSystemWifiSettings()
+        delay(850)
+        val found = LinkedHashSet<String>()
+        for (scroll in 0..1) {
+            val root = rootInActiveWindow
+            if (root != null) {
+                found.addAll(extractSavedSsidsFromNode(root))
+                if (scroll == 0) scrollListForward(root)
+            }
+            delay(350)
+        }
+        bringAppToFront()
+        return found.toList()
     }
 
     private suspend fun waitForWifiConnected(targetSsid: String, timeoutMs: Long): Boolean =
@@ -310,34 +493,29 @@ class WifiAutoSwitchService : AccessibilityService() {
                     val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
                     val hasNet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
                     val validated = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-                    // 一旦校验通过，或已连上目标 SSID 超过 1.6 秒且有网络能力，即可开始测速
-                    if (validated || (hasNet && System.currentTimeMillis() - ssidMatchedAt >= 1600L)) {
+                    if (validated || (hasNet && System.currentTimeMillis() - ssidMatchedAt >= 1500L)) {
                         return@withContext true
                     }
                 }
-                delay(450)
+                delay(400)
             }
             NetworkInspector.inspect(this@WifiAutoSwitchService).rawSsid == targetSsid
         }
 
-    /** 扫描系统 Wi-Fi 设置界面里标有「已保存 / 已连接」的条目名称 */
-    private fun discoverSavedSsidsOnScreen(): List<String> {
-        val root = rootInActiveWindow ?: return emptyList()
+    private fun extractSavedSsidsFromNode(root: AccessibilityNodeInfo): List<String> {
         val found = LinkedHashSet<String>()
         val keywords = listOf("已保存", "已连接", "Saved", "Connected", "自动连接")
         val ignoreLabels = setOf(
-            "WLAN", "Wi-Fi", "网络和互联网", "已保存的网络", "可用网络",
-            "添加网络", "高级设置", "WLAN助理", "更多设置", "刷新"
+            "WLAN", "Wi-Fi", "网络和互联网", "已保存的网络", "可用网络", "我的网络",
+            "添加网络", "高级设置", "WLAN助理", "更多设置", "刷新", "已开启"
         )
 
-        fun collectSavedRows(node: AccessibilityNodeInfo?) {
+        fun walk(node: AccessibilityNodeInfo?) {
             if (node == null) return
             val childCount = node.childCount
             if (childCount in 2..6) {
                 val texts = mutableListOf<String>()
-                for (i in 0 until childCount) {
-                    gatherTexts(node.getChild(i), texts)
-                }
+                for (i in 0 until childCount) gatherTexts(node.getChild(i), texts)
                 val hasSavedTag = texts.any { t -> keywords.any { kw -> t.contains(kw, ignoreCase = true) } }
                 if (hasSavedTag) {
                     val candidate = texts.firstOrNull { t ->
@@ -348,12 +526,10 @@ class WifiAutoSwitchService : AccessibilityService() {
                     if (candidate != null) found.add(candidate)
                 }
             }
-            for (i in 0 until childCount) {
-                collectSavedRows(node.getChild(i))
-            }
+            for (i in 0 until childCount) walk(node.getChild(i))
         }
 
-        collectSavedRows(root)
+        walk(root)
         return found.toList()
     }
 
@@ -361,9 +537,7 @@ class WifiAutoSwitchService : AccessibilityService() {
         if (node == null) return
         val txt = node.text?.toString()?.trim()
         if (!txt.isNullOrEmpty()) out.add(txt)
-        for (i in 0 until node.childCount) {
-            gatherTexts(node.getChild(i), out)
-        }
+        for (i in 0 until node.childCount) gatherTexts(node.getChild(i), out)
     }
 
     private fun findExactTextNode(root: AccessibilityNodeInfo, target: String): AccessibilityNodeInfo? {
@@ -385,13 +559,17 @@ class WifiAutoSwitchService : AccessibilityService() {
         return null
     }
 
-    private fun containsPasswordInput(node: AccessibilityNodeInfo?): Boolean {
+    private fun containsPasswordPrompt(node: AccessibilityNodeInfo?): Boolean {
         if (node == null) return false
         if (node.isPassword || node.className?.toString()?.contains("EditText") == true) {
             return true
         }
+        val txt = node.text?.toString().orEmpty()
+        if (txt.contains("输入密码") || txt.contains("请输入密码") || txt.equals("密码", ignoreCase = true)) {
+            return true
+        }
         for (i in 0 until node.childCount) {
-            if (containsPasswordInput(node.getChild(i))) return true
+            if (containsPasswordPrompt(node.getChild(i))) return true
         }
         return false
     }

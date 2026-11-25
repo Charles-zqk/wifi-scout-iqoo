@@ -228,7 +228,7 @@ class MainActivity : AppCompatActivity() {
             autoProgressBanner.visibility = View.GONE
         }
 
-        // 主按钮 1：一键自动轮测所有已保存的 Wi-Fi
+        // 主按钮 1：一键全量自动轮测附近全部可连 Wi-Fi
         btnAutoBatchTest.setOnClickListener {
             if (!ensureLocationReady()) return@setOnClickListener
             val svc = WifiAutoSwitchService.instance
@@ -239,7 +239,7 @@ class MainActivity : AppCompatActivity() {
             if (WifiAutoSwitchService.lastStatus.running) {
                 svc.cancelRunningTask()
             } else {
-                svc.runBatchInspectSavedWifis()
+                svc.runBatchInspectSavedWifis(onlyStarred = onlyStarredFilter)
             }
         }
 
@@ -289,10 +289,11 @@ class MainActivity : AppCompatActivity() {
 
         btnClearHistory.setOnClickListener {
             HistoryStore.clearHistory(this)
+            HistoryStore.clearAllNoPasswordSsids(this)
             renderHistory()
             renderScannedWifis(fromLiveScan = false)
             WifiScoutWidgetProvider.refreshAllWidgets(this)
-            toast("已清空实测排行榜")
+            toast("已清空实测排行榜并重置跳过记录")
         }
     }
 
@@ -354,12 +355,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleAutoStatus(status: AutoTaskStatus) {
+        if (status.livePhase != null) {
+            tvPhase.text = status.livePhase
+        }
+        if (status.liveMbps != null && status.liveMbps > 0.0) {
+            tvLiveSpeed.text = String.format(
+                Locale.US,
+                if (status.liveMbps >= 100) "%.0f" else "%.1f",
+                status.liveMbps
+            )
+        }
+        if (status.latestCompleted != null) {
+            syncMainResultUI(status.latestCompleted)
+            renderHistory()
+            renderScannedWifis(fromLiveScan = false)
+        }
+
         if (status.running) {
             autoProgressBanner.visibility = View.VISIBLE
             tvAutoProgress.text = status.message
             btnAutoBatchTest.text = "■ 正在自动轮测中（点击停止）"
         } else {
-            btnAutoBatchTest.text = "🤖 一键轮测已存 Wi-Fi（自动切网找最快）"
+            btnAutoBatchTest.text = "🤖 一键轮测全部 Wi-Fi（闪切瞬回找最快）"
             if (!status.finishedSummary.isNullOrEmpty()) {
                 autoProgressBanner.visibility = View.VISIBLE
                 tvAutoProgress.text = status.finishedSummary

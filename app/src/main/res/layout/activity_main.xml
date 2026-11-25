@@ -29,7 +29,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="WiFi侦察兵 v1.3 · 自动切网版"
+                    android:text="WiFi侦察兵 v1.4 · 闪切全量轮测版"
                     android:textColor="@color/accent_sky"
                     android:textSize="11sp"
                     android:textStyle="bold" />
@@ -329,14 +329,14 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- 主按钮 1：一键自动轮测所有已保存 Wi-Fi -->
+            <!-- 主按钮 1：一键全量自动轮测所有附近有密码 Wi-Fi -->
             <androidx.appcompat.widget.AppCompatButton
                 android:id="@+id/btnAutoBatchTest"
                 android:layout_width="match_parent"
                 android:layout_height="52dp"
                 android:layout_marginTop="14dp"
                 android:background="@drawable/bg_btn_primary"
-                android:text="🤖 一键轮测已存 Wi-Fi（自动切网找最快）"
+                android:text="🤖 一键轮测全部 Wi-Fi（闪切瞬回找最快）"
                 android:textAllCaps="false"
                 android:textColor="@color/btn_text_dark"
                 android:textSize="15sp"
