@@ -428,6 +428,92 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
+        <!-- 附近 Wi-Fi 信号强度一键扫描卡 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="附近 Wi-Fi 信号强度"
+                    android:textColor="@color/text_primary"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btnSwitchWifiPanel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:paddingHorizontal="9dp"
+                    android:paddingVertical="5dp"
+                    android:text="🔀 快速切网"
+                    android:textColor="@color/text_primary"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <androidx.appcompat.widget.AppCompatButton
+                    android:id="@+id/btnScanWifis"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1.2"
+                    android:background="@drawable/bg_btn_primary"
+                    android:text="📡 一键扫描信号强度"
+                    android:textAllCaps="false"
+                    android:textColor="@color/btn_text_dark"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btnFilterStarred"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:text="★ 全部(已标置顶)"
+                    android:textColor="@color/accent_amber"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvScanStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="点「一键扫描」查看附近所有 Wi-Fi 强弱；点左侧 ☆ 可标记你有密码的常用 Wi-Fi（连过的会自动标 ★）"
+                android:textColor="@color/text_muted"
+                android:textSize="11sp" />
+
+            <LinearLayout
+                android:id="@+id/scanListContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="vertical" />
+        </LinearLayout>
+
         <!-- 附近网络对比排行榜 -->
         <LinearLayout
             android:layout_width="match_parent"

@@ -9,6 +9,7 @@ object HistoryStore {
     private const val KEY_HISTORY = "history_json"
     private const val KEY_MODE = "test_mode"
     private const val KEY_NODE = "node_pref"
+    private const val KEY_STARRED = "starred_ssids"
 
     fun saveResult(context: Context, result: SpeedTestResult) {
         val list = loadHistory(context).toMutableList()
@@ -69,6 +70,38 @@ object HistoryStore {
     fun setNodePref(context: Context, pref: NodePref) {
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit().putString(KEY_NODE, pref.name).apply()
+    }
+
+    fun getStarredSsids(context: Context): Set<String> {
+        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getStringSet(KEY_STARRED, emptySet())
+            ?.toSet()
+            ?: emptySet()
+    }
+
+    fun markStarredSsid(context: Context, ssid: String) {
+        val clean = ssid.trim()
+        if (clean.isEmpty()) return
+        val next = getStarredSsids(context).toMutableSet()
+        if (next.add(clean)) {
+            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                .edit().putStringSet(KEY_STARRED, next).apply()
+        }
+    }
+
+    fun toggleStarredSsid(context: Context, ssid: String): Boolean {
+        val clean = ssid.trim()
+        val next = getStarredSsids(context).toMutableSet()
+        val nowStarred = if (next.contains(clean)) {
+            next.remove(clean)
+            false
+        } else {
+            next.add(clean)
+            true
+        }
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit().putStringSet(KEY_STARRED, next).apply()
+        return nowStarred
     }
 
     private fun toJson(r: SpeedTestResult): JSONObject = JSONObject().apply {

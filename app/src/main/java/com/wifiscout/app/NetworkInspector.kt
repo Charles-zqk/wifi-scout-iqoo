@@ -29,6 +29,16 @@ data class CurrentNetworkInfo(
     val needsLocationToggle: Boolean
 )
 
+data class ScannedWifi(
+    val ssid: String,
+    val bestRssiDbm: Int,
+    val band: String,
+    val frequencyMhz: Int,
+    val apCount: Int,
+    val signalLabel: String,
+    val signalPercent: Int
+)
+
 object NetworkInspector {
 
     @Volatile
@@ -233,6 +243,72 @@ object NetworkInspector {
             linkSpeedMbps = null,
             needsLocationPermission = !hasPerm,
             needsLocationToggle = hasPerm && !locOn
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    fun triggerWifiScan(context: Context): Boolean {
+        return try {
+            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            wm.startScan()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    fun getScannedWifis(context: Context): List<ScannedWifi> {
+        if (!hasFineLocationPermission(context)) return emptyList()
+        val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val rawResults = try {
+            wm.scanResults.orEmpty()
+        } catch (_: SecurityException) {
+            emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        // 按 SSID 合并多 AP（酒店/办公区常有多个同名路由器），取最强信号并优先 5GHz/6GHz
+        val grouped = LinkedHashMap<String, MutableList<android.net.wifi.ScanResult>>()
+        for (sr in rawResults) {
+            val name = sr.SSID?.trim().orEmpty()
+            if (name.isEmpty()) continue
+            grouped.getOrPut(name) { mutableListOf() }.add(sr)
+        }
+
+        val list = grouped.map { (ssid, aps) ->
+            val bestAp = aps.maxWith(
+                compareBy<android.net.wifi.ScanResult> { it.level }
+                    .thenBy { it.frequency }
+            )
+            val rssi = bestAp.level
+            val freq = bestAp.frequency
+            val band = when {
+                freq >= 5900 -> "6GHz"
+                freq >= 4900 -> "5GHz"
+                else -> "2.4GHz"
+            }
+            val pct = (((rssi + 95).coerceIn(0, 55)) * 100) / 55
+            val label = when {
+                rssi >= -55 -> "极强"
+                rssi >= -67 -> "良好"
+                rssi >= -76 -> "一般"
+                else -> "较弱"
+            }
+            ScannedWifi(
+                ssid = ssid,
+                bestRssiDbm = rssi,
+                band = band,
+                frequencyMhz = freq,
+                apCount = aps.size,
+                signalLabel = label,
+                signalPercent = pct
+            )
+        }
+
+        return list.sortedWith(
+            compareByDescending<ScannedWifi> { it.bestRssiDbm }
+                .thenByDescending { it.frequencyMhz }
         )
     }
 }

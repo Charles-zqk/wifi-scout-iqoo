@@ -1,11 +1,14 @@
 package com.wifiscout.app
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -69,6 +72,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var historyContainer: LinearLayout
     private lateinit var tvEmptyHistory: TextView
 
+    private lateinit var btnScanWifis: Button
+    private lateinit var btnFilterStarred: TextView
+    private lateinit var btnSwitchWifiPanel: TextView
+    private lateinit var tvScanStatus: TextView
+    private lateinit var scanListContainer: LinearLayout
+    private var onlyStarredFilter = false
+
+    private val scanReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            renderScannedWifis(fromLiveScan = true)
+        }
+    }
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
@@ -97,12 +113,26 @@ class MainActivity : AppCompatActivity() {
         }
         netCallback = cb
         NetworkInspector.registerCallback(this, cb)
+        try {
+            ContextCompat.registerReceiver(
+                this,
+                scanReceiver,
+                IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        } catch (_: Exception) {
+        }
+        renderScannedWifis(fromLiveScan = false)
     }
 
     override fun onPause() {
         super.onPause()
         netCallback?.let { NetworkInspector.unregisterCallback(this, it) }
         netCallback = null
+        try {
+            unregisterReceiver(scanReceiver)
+        } catch (_: Exception) {
+        }
     }
 
     override fun onDestroy() {
@@ -143,6 +173,12 @@ class MainActivity : AppCompatActivity() {
         btnClearHistory = findViewById(R.id.btnClearHistory)
         historyContainer = findViewById(R.id.historyContainer)
         tvEmptyHistory = findViewById(R.id.tvEmptyHistory)
+
+        btnScanWifis = findViewById(R.id.btnScanWifis)
+        btnFilterStarred = findViewById(R.id.btnFilterStarred)
+        btnSwitchWifiPanel = findViewById(R.id.btnSwitchWifiPanel)
+        tvScanStatus = findViewById(R.id.tvScanStatus)
+        scanListContainer = findViewById(R.id.scanListContainer)
     }
 
     private fun setupListeners() {
@@ -196,6 +232,52 @@ class MainActivity : AppCompatActivity() {
             WifiScoutWidgetProvider.refreshAllWidgets(this)
             toast("已清空附近网络对比记录")
         }
+
+        btnScanWifis.setOnClickListener {
+            if (!NetworkInspector.hasFineLocationPermission(this)) {
+                requestWifiPermissions()
+                return@setOnClickListener
+            }
+            if (!NetworkInspector.isLocationServiceEnabled(this)) {
+                toast("请先打开定位服务(GPS)开关，系统才允许扫描附近 Wi-Fi")
+                startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                return@setOnClickListener
+            }
+            tvScanStatus.text = "正在扫描附近 Wi-Fi 信号强度…"
+            val triggered = NetworkInspector.triggerWifiScan(this)
+            renderScannedWifis(fromLiveScan = false)
+            if (!triggered) {
+                toast("系统限制频繁扫描(2分钟内最多4次)，已展示最新缓存强度")
+            } else {
+                toast("正在扫描附近 Wi-Fi 强度…")
+            }
+        }
+
+        btnFilterStarred.setOnClickListener {
+            onlyStarredFilter = !onlyStarredFilter
+            btnFilterStarred.text = if (onlyStarredFilter) "★ 仅看已标密码" else "★ 全部(已标置顶)"
+            renderScannedWifis(fromLiveScan = false)
+        }
+
+        btnSwitchWifiPanel.setOnClickListener {
+            openQuickWifiSwitcher()
+        }
+    }
+
+    private fun openQuickWifiSwitcher() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startActivity(Intent(Settings.Panel.ACTION_WIFI))
+            } else {
+                startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
+            }
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
+            } catch (_: Exception) {
+                toast("请下拉状态栏手动切换 Wi-Fi")
+            }
+        }
     }
 
     private fun requestWifiPermissions() {
@@ -212,6 +294,9 @@ class MainActivity : AppCompatActivity() {
     private fun refreshNetworkStatus() {
         val info = NetworkInspector.inspect(this)
         currentNetInfo = info
+        if (info.kind == NetKind.WIFI && !info.rawSsid.isNullOrBlank()) {
+            HistoryStore.markStarredSsid(this, info.rawSsid)
+        }
 
         val icon = when (info.kind) {
             NetKind.WIFI -> "📶 "
@@ -453,6 +538,108 @@ class MainActivity : AppCompatActivity() {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("wifi_scout_report", text))
         toast("已复制测速结论，可直接发给电脑")
+    }
+
+    private fun renderScannedWifis(fromLiveScan: Boolean) {
+        scanListContainer.removeAllViews()
+        if (!NetworkInspector.hasFineLocationPermission(this) || !NetworkInspector.isLocationServiceEnabled(this)) {
+            tvScanStatus.text = "授予位置权限并打开 GPS 开关后，即可一键扫描附近 Wi-Fi 信号强度"
+            return
+        }
+
+        val allScanned = NetworkInspector.getScannedWifis(this)
+        val starred = HistoryStore.getStarredSsids(this)
+        val currentSsid = currentNetInfo?.rawSsid
+        val historyByName = HistoryStore.loadHistory(this).associateBy { it.networkName }
+
+        if (allScanned.isEmpty()) {
+            tvScanStatus.text = "暂未扫到周边 Wi-Fi，请点击「一键扫描信号强度」重试"
+            return
+        }
+
+        val filtered = if (onlyStarredFilter) {
+            allScanned.filter { starred.contains(it.ssid) || it.ssid == currentSsid }
+        } else {
+            allScanned
+        }
+
+        // 已星标(有密码/连过)优先置顶，组内按信号强度 dBm 降序
+        val sorted = filtered.sortedWith(
+            compareByDescending<ScannedWifi> { starred.contains(it.ssid) || it.ssid == currentSsid }
+                .thenByDescending { it.bestRssiDbm }
+                .thenByDescending { it.frequencyMhz }
+        )
+
+        val starredInRange = allScanned.count { starred.contains(it.ssid) || it.ssid == currentSsid }
+        val timeTag = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        tvScanStatus.text = if (onlyStarredFilter && sorted.isEmpty()) {
+            "附近共 ${allScanned.size} 个 Wi-Fi，尚未标记常用密码；请切回「全部」点左侧 ☆ 标记"
+        } else {
+            val tag = if (fromLiveScan) "刚刚扫描($timeTag)" else "最新结果($timeTag)"
+            "$tag · 附近共 ${allScanned.size} 个 Wi-Fi，其中已标 ★ 有 $starredInRange 个（按强度排序）"
+        }
+
+        val inflater = LayoutInflater.from(this)
+        val displayList = sorted.take(20)
+        for (wifi in displayList) {
+            val row = inflater.inflate(R.layout.item_scanned_wifi, scanListContainer, false)
+            val btnStar = row.findViewById<TextView>(R.id.btnScanStar)
+            val tvSsid = row.findViewById<TextView>(R.id.tvScanSsid)
+            val tvBand = row.findViewById<TextView>(R.id.tvScanBand)
+            val tvSub = row.findViewById<TextView>(R.id.tvScanSub)
+            val tvRssi = row.findViewById<TextView>(R.id.tvScanRssi)
+            val tvQuality = row.findViewById<TextView>(R.id.tvScanQuality)
+
+            val isStarred = starred.contains(wifi.ssid) || wifi.ssid == currentSsid
+            btnStar.text = if (isStarred) "★" else "☆"
+            btnStar.setTextColor(
+                ContextCompat.getColor(
+                    this,
+                    if (isStarred) R.color.accent_amber else R.color.text_muted
+                )
+            )
+            btnStar.setOnClickListener {
+                val now = HistoryStore.toggleStarredSsid(this, wifi.ssid)
+                toast(if (now) "已标记「${wifi.ssid}」为常用有密码 Wi-Fi" else "已取消标记「${wifi.ssid}」")
+                renderScannedWifis(fromLiveScan = false)
+            }
+
+            val isCurrent = wifi.ssid == currentSsid
+            tvSsid.text = if (isCurrent) "${wifi.ssid}（当前连接）" else wifi.ssid
+            tvBand.text = wifi.band
+
+            val hist = historyByName[wifi.ssid]
+            val subParts = mutableListOf<String>()
+            if (isStarred) subParts.add("★常用/有密码")
+            if (wifi.apCount > 1) subParts.add("${wifi.apCount}个热点")
+            if (hist != null) {
+                subParts.add(String.format(Locale.US, "曾测↓%.1fM(%d分)", hist.downloadMbps, hist.verdict.score))
+            } else {
+                subParts.add("点「快速切网」可切去测网速")
+            }
+            tvSub.text = subParts.joinToString(" · ")
+
+            tvRssi.text = "${wifi.bestRssiDbm} dBm"
+            val rssiColor = when {
+                wifi.bestRssiDbm >= -55 -> R.color.accent_green
+                wifi.bestRssiDbm >= -67 -> R.color.accent_sky
+                wifi.bestRssiDbm >= -76 -> R.color.accent_amber
+                else -> R.color.accent_red
+            }
+            tvRssi.setTextColor(ContextCompat.getColor(this, rssiColor))
+            tvQuality.text = "${wifi.signalLabel} ${wifi.signalPercent}%"
+
+            row.setOnClickListener {
+                if (!isCurrent) {
+                    toast("请在弹出面板选择「${wifi.ssid}」，切过去后点一键测速")
+                    openQuickWifiSwitcher()
+                } else {
+                    startSpeedTest()
+                }
+            }
+
+            scanListContainer.addView(row)
+        }
     }
 
     private fun toast(msg: String) {
