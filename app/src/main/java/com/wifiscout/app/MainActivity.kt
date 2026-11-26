@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnFixPermission: Button
     private lateinit var autoProgressBanner: LinearLayout
     private lateinit var tvAutoProgress: TextView
+    private lateinit var btnViewAutoLog: TextView
     private lateinit var btnStopAuto: TextView
 
     private lateinit var tvPhase: TextView
@@ -134,13 +135,16 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
         }
 
+        WifiAutoSwitchService.setHostActivity(this)
         WifiAutoSwitchService.statusListener = { status ->
             runOnUiThread { handleAutoStatus(status) }
         }
         handleAutoStatus(WifiAutoSwitchService.lastStatus)
 
-        // 自动触发一次扫描并展示最新列表，无需手动点按钮
-        NetworkInspector.triggerWifiScan(this)
+        // 自动轮测期间不触发主动扫描，避免抢占 Wi-Fi 射频干扰连接与测速
+        if (!WifiAutoSwitchService.lastStatus.running) {
+            NetworkInspector.triggerWifiScan(this)
+        }
         renderScannedWifis(fromLiveScan = false)
         renderHistory()
     }
@@ -157,6 +161,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        WifiAutoSwitchService.clearHostActivity(this)
         WifiAutoSwitchService.statusListener = null
         uiScope.cancel()
     }
@@ -170,6 +175,7 @@ class MainActivity : AppCompatActivity() {
         btnFixPermission = findViewById(R.id.btnFixPermission)
         autoProgressBanner = findViewById(R.id.autoProgressBanner)
         tvAutoProgress = findViewById(R.id.tvAutoProgress)
+        btnViewAutoLog = findViewById(R.id.btnViewAutoLog)
         btnStopAuto = findViewById(R.id.btnStopAuto)
 
         tvPhase = findViewById(R.id.tvPhase)
@@ -221,6 +227,20 @@ class MainActivity : AppCompatActivity() {
             } else {
                 requestWifiPermissions()
             }
+        }
+
+        btnViewAutoLog.setOnClickListener {
+            val logText = WifiAutoSwitchService.getLogsText()
+            AlertDialog.Builder(this)
+                .setTitle("自动切网运行日志")
+                .setMessage(logText)
+                .setPositiveButton("复制日志") { _, _ ->
+                    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("wifi_scout_log", logText))
+                    toast("已复制运行日志")
+                }
+                .setNegativeButton("关闭", null)
+                .show()
         }
 
         btnStopAuto.setOnClickListener {

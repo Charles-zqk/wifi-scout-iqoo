@@ -44,6 +44,9 @@ object NetworkInspector {
     @Volatile
     private var cachedWifiInfo: WifiInfo? = null
 
+    @Volatile
+    private var activeCallbackCount: Int = 0
+
     fun createLiveWifiCallback(onChanged: () -> Unit): ConnectivityManager.NetworkCallback {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             object : ConnectivityManager.NetworkCallback(
@@ -84,6 +87,18 @@ object NetworkInspector {
         }
     }
 
+    fun registerWifiOnlyCallback(context: Context, callback: ConnectivityManager.NetworkCallback) {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build()
+        try {
+            cm.registerNetworkCallback(request, callback)
+            activeCallbackCount++
+        } catch (_: Exception) {
+        }
+    }
+
     fun registerCallback(context: Context, callback: ConnectivityManager.NetworkCallback) {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val request = NetworkRequest.Builder()
@@ -91,6 +106,7 @@ object NetworkInspector {
             .build()
         try {
             cm.registerNetworkCallback(request, callback)
+            activeCallbackCount++
         } catch (_: Exception) {
         }
     }
@@ -100,6 +116,11 @@ object NetworkInspector {
         try {
             cm.unregisterNetworkCallback(callback)
         } catch (_: Exception) {
+        } finally {
+            activeCallbackCount = (activeCallbackCount - 1).coerceAtLeast(0)
+            if (activeCallbackCount == 0) {
+                cachedWifiInfo = null
+            }
         }
     }
 
@@ -140,21 +161,34 @@ object NetworkInspector {
 
         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
             val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val wifiInfo: WifiInfo? = cachedWifiInfo ?: try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    (caps.transportInfo as? WifiInfo) ?: wm.connectionInfo
-                } else {
-                    wm.connectionInfo
-                }
+            // 优先直接查询实时 WifiManager.connectionInfo（避免切网时旧缓存卡死在旧 SSID！）
+            val directInfo: WifiInfo? = try {
+                wm.connectionInfo
             } catch (_: Exception) {
                 null
             }
+            val capsInfo: WifiInfo? = try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) caps.transportInfo as? WifiInfo else null
+            } catch (_: Exception) {
+                null
+            }
+            val liveCached: WifiInfo? = if (activeCallbackCount > 0) cachedWifiInfo else null
 
-            val raw = wifiInfo?.ssid?.trim()?.removePrefix("\"")?.removeSuffix("\"")
-            val validSsid = raw != null &&
-                raw.isNotEmpty() &&
-                !raw.equals("<unknown ssid>", ignoreCase = true) &&
-                raw != "0x"
+            fun cleanSsid(info: WifiInfo?): String? {
+                val s = info?.ssid?.trim()?.removePrefix("\"")?.removeSuffix("\"")
+                return if (!s.isNullOrEmpty() && !s.equals("<unknown ssid>", ignoreCase = true) && s != "0x") s else null
+            }
+
+            // 优先选能拿到有效实时 SSID 的对象：capsInfo -> directInfo -> liveCached
+            val wifiInfo: WifiInfo? = when {
+                cleanSsid(capsInfo) != null -> capsInfo
+                cleanSsid(directInfo) != null -> directInfo
+                cleanSsid(liveCached) != null -> liveCached
+                else -> directInfo ?: capsInfo ?: liveCached
+            }
+
+            val raw = cleanSsid(wifiInfo)
+            val validSsid = raw != null
 
             val rssi = wifiInfo?.rssi?.takeIf { it in -120..-1 }
             val freq = wifiInfo?.frequency?.takeIf { it > 0 }

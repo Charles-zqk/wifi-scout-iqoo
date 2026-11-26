@@ -29,7 +29,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="WiFi侦察兵 v1.4 · 闪切全量轮测版"
+                    android:text="WiFi侦察兵 v1.5.1 · 深度优化版"
                     android:textColor="@color/accent_sky"
                     android:textSize="11sp"
                     android:textStyle="bold" />
@@ -122,6 +122,19 @@
                 android:text="正在自动切网测速…"
                 android:textColor="@color/accent_green"
                 android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnViewAutoLog"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_btn_secondary"
+                android:paddingHorizontal="9dp"
+                android:paddingVertical="5dp"
+                android:text="日志"
+                android:textColor="@color/accent_sky"
+                android:textSize="12sp"
                 android:textStyle="bold" />
 
             <TextView
